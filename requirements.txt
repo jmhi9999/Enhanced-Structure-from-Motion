@@ -20,41 +20,18 @@ lightglue @ git+https://github.com/cvg/LightGlue.git
 # JIT compilation and optimization
 numba>=0.58.0
 
-# Memory monitoring and profiling
+# Memory monitoring
 psutil>=5.9.0
 
 # Data storage and serialization
 h5py>=3.8.0
-pickle5>=0.0.12
 
-# Machine learning for depth estimation
+# Machine learning for depth estimation (conditional import)
 transformers>=4.30.0
-timm>=0.9.0
-scikit-image>=0.20.0
+requests>=2.28.0
 
 # Development and testing
 pytest>=7.0.0
 black>=22.0.0
 flake8>=5.0.0
 mypy>=1.0.0
-
-# Performance monitoring
-memory-profiler>=0.60.0
-line-profiler>=4.0.0
-
-# Distributed processing
-torch>=2.0.0  # Already included, but needed for distributed
-
-# Utilities
-pathlib  # Built-in for Python 3.4+
-argparse  # Built-in
-logging  # Built-in
-json  # Built-in
-time  # Built-in
-subprocess  # Built-in
-threading  # Built-in
-concurrent.futures  # Built-in for Python 3.2+
-collections  # Built-in
-dataclasses  # Built-in for Python 3.7+
-enum  # Built-in
-pickle  # Built-in

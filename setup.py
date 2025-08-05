@@ -35,6 +35,8 @@ setup(
         "numba>=0.58.0",
         "psutil>=5.9.0",
         "h5py>=3.8.0",
+        "transformers>=4.30.0",
+        "requests>=2.28.0",
     ],
     extras_require={
         "dev": [
@@ -44,7 +46,8 @@ setup(
         ],
         "gpu": [
             "cupy-cuda12x>=12.0.0",  # For CUDA 12.x
-            "faiss-gpu>=1.7.4",
+            "faiss-gpu>=1.7.0",
+            "pyceres>=0.1.0",
         ],
     },
     entry_points={
