@@ -83,6 +83,11 @@ class EnhancedSfM:
             'profile': profile
         }
         
+        # Process device setting
+        if device == "auto":
+            import torch
+            self.config['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
         # Setup logging
         logging.basicConfig(
             level=logging.INFO,
