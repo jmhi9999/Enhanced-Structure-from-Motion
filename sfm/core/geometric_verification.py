@@ -53,29 +53,43 @@ class GeometricVerification:
     """
     
     def __init__(self, 
-                 method: RANSACMethod = RANSACMethod.OPENCV_MAGSAC,
+                 config_or_method = None,
                  device: Optional[torch.device] = None,
                  **kwargs):
         """
         Initialize geometric verification
         
         Args:
-            method: RANSAC method to use
+            config_or_method: Either a config dict or RANSACMethod enum
             device: GPU device for GPU-based methods
             **kwargs: Additional parameters for the chosen method
         """
-        self.method = method
-        self.device = device or (torch.device('cuda') if GPU_AVAILABLE else torch.device('cpu'))
+        # Handle config dictionary or method enum
+        if isinstance(config_or_method, dict):
+            config = config_or_method
+            method_str = config.get('geometric_method', 'opencv_magsac')
+            self.method = RANSACMethod(method_str) if method_str in [m.value for m in RANSACMethod] else RANSACMethod.OPENCV_MAGSAC
+            self.confidence = config.get('confidence', 0.999)
+            self.max_iterations = config.get('max_iterations', 10000)
+            self.threshold = config.get('threshold', 1.0)
+        elif config_or_method is None or isinstance(config_or_method, RANSACMethod):
+            self.method = config_or_method or RANSACMethod.OPENCV_MAGSAC
+            self.confidence = kwargs.get('confidence', 0.999)
+            self.max_iterations = kwargs.get('max_iterations', 10000)
+            self.threshold = kwargs.get('threshold', 1.0)
+        else:
+            # Fallback to default
+            self.method = RANSACMethod.OPENCV_MAGSAC
+            self.confidence = kwargs.get('confidence', 0.999)
+            self.max_iterations = kwargs.get('max_iterations', 10000)
+            self.threshold = kwargs.get('threshold', 1.0)
         
-        # Default parameters
-        self.confidence = kwargs.get('confidence', 0.999)
-        self.max_iterations = kwargs.get('max_iterations', 10000)
-        self.threshold = kwargs.get('threshold', 1.0)
+        self.device = device or (torch.device('cuda') if GPU_AVAILABLE else torch.device('cpu'))
         
         # Initialize the chosen method
         self._init_method(**kwargs)
         
-        logger.info(f"Geometric verification initialized with method: {method.value}")
+        logger.info(f"Geometric verification initialized with method: {self.method.value}")
     
     def _init_method(self, **kwargs):
         """Initialize the chosen RANSAC method"""
