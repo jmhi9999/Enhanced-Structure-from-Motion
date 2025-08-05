@@ -20,7 +20,7 @@ setup(
     author_email="minhyeok0104@gmail.com",
     url="https://github.com/yourusername/Enhanced-Structure-from-Motion",
     packages=find_packages(),
-    py_modules=["enhanced_sfm"],
+    py_modules=["enhanced_sfm", "sfm_pipeline"],
     python_requires=">=3.8",
     install_requires=[
         "torch>=2.0.0",

@@ -8,7 +8,15 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from sfm_pipeline import sfm_pipeline
+# Import core components directly
+from sfm.core import (
+    FeatureExtractor,
+    FeatureMatcher,
+    GeometricVerification,
+    Reconstruction,
+    DenseDepthEstimator,
+    ScaleRecovery
+)
 
 
 class EnhancedSfM:
@@ -107,16 +115,50 @@ class EnhancedSfM:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
-        # Run pipeline
+        # Run pipeline using core components
         try:
-            results = sfm_pipeline(
-                input_dir=input_dir,
-                output_dir=output_dir,
-                **self.config
-            )
+            # Initialize components
+            feature_extractor = FeatureExtractor(self.config)
+            feature_matcher = FeatureMatcher(self.config)
+            geometric_verifier = GeometricVerification(self.config)
+            reconstruction = Reconstruction(self.config)
+            
+            # Load images
+            image_paths = list(Path(input_dir).glob("*.jpg")) + list(Path(input_dir).glob("*.png"))
+            if not image_paths:
+                raise ValueError(f"No images found in {input_dir}")
+            
+            self.logger.info(f"Processing {len(image_paths)} images")
+            
+            # Extract features
+            features = feature_extractor.extract(image_paths)
+            
+            # Match features
+            matches = feature_matcher.match(features)
+            
+            # Verify geometry
+            verified_matches = geometric_verifier.verify(matches)
+            
+            # 3D reconstruction
+            reconstruction_result = reconstruction.reconstruct(features, verified_matches)
+            
+            # Optional: Dense depth estimation
+            if self.config.get('use_monocular_depth', True):
+                depth_estimator = DenseDepthEstimator(self.config)
+                depth_maps = depth_estimator.estimate(image_paths)
+                reconstruction_result['depth_maps'] = depth_maps
+                
+                # Optional: Scale recovery
+                if self.config.get('scale_recovery', True):
+                    scale_recovery = ScaleRecovery(self.config)
+                    scaled_result = scale_recovery.recover(
+                        reconstruction_result['points3d'], 
+                        depth_maps
+                    )
+                    reconstruction_result.update(scaled_result)
             
             self.logger.info("Enhanced SfM Pipeline completed successfully!")
-            return results
+            return reconstruction_result
             
         except Exception as e:
             self.logger.error(f"Pipeline failed: {e}")
@@ -143,16 +185,50 @@ class EnhancedSfM:
         self.logger.info("Starting Enhanced SfM Pipeline with custom configuration")
         self.logger.info(f"Custom config: {custom_config}")
         
-        # Run pipeline with custom config
+        # Run pipeline with custom config using core components
         try:
-            results = sfm_pipeline(
-                input_dir=input_dir,
-                output_dir=output_dir,
-                **config
-            )
+            # Initialize components with custom config
+            feature_extractor = FeatureExtractor(config)
+            feature_matcher = FeatureMatcher(config)
+            geometric_verifier = GeometricVerification(config)
+            reconstruction = Reconstruction(config)
+            
+            # Load images
+            image_paths = list(Path(input_dir).glob("*.jpg")) + list(Path(input_dir).glob("*.png"))
+            if not image_paths:
+                raise ValueError(f"No images found in {input_dir}")
+            
+            self.logger.info(f"Processing {len(image_paths)} images with custom config")
+            
+            # Extract features
+            features = feature_extractor.extract(image_paths)
+            
+            # Match features
+            matches = feature_matcher.match(features)
+            
+            # Verify geometry
+            verified_matches = geometric_verifier.verify(matches)
+            
+            # 3D reconstruction
+            reconstruction_result = reconstruction.reconstruct(features, verified_matches)
+            
+            # Optional: Dense depth estimation
+            if config.get('use_monocular_depth', True):
+                depth_estimator = DenseDepthEstimator(config)
+                depth_maps = depth_estimator.estimate(image_paths)
+                reconstruction_result['depth_maps'] = depth_maps
+                
+                # Optional: Scale recovery
+                if config.get('scale_recovery', True):
+                    scale_recovery = ScaleRecovery(config)
+                    scaled_result = scale_recovery.recover(
+                        reconstruction_result['points3d'], 
+                        depth_maps
+                    )
+                    reconstruction_result.update(scaled_result)
             
             self.logger.info("Enhanced SfM Pipeline completed successfully!")
-            return results
+            return reconstruction_result
             
         except Exception as e:
             self.logger.error(f"Pipeline failed: {e}")
