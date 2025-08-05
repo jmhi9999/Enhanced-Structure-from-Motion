@@ -11,10 +11,7 @@ from abc import ABC, abstractmethod
 import cv2
 from pathlib import Path
 
-try:
-    from lightglue import SuperPoint, ALIKED, DISK
-except ImportError:
-    print("Warning: LightGlue not installed. Using fallback implementations.")
+# Don't import LightGlue at module level - use lazy imports
 
 
 class BaseFeatureExtractor(ABC):
@@ -54,32 +51,12 @@ class SuperPointExtractor(BaseFeatureExtractor):
     """SuperPoint feature extractor"""
     
     def _setup_model(self):
+        """Setup SuperPoint model"""
         try:
+            from lightglue import SuperPoint
             self.model = SuperPoint(max_num_keypoints=2048).eval().to(self.device)
-        except NameError:
-            # Fallback implementation
-            self.model = self._create_superpoint_fallback()
-    
-    def _create_superpoint_fallback(self):
-        """Fallback SuperPoint implementation"""
-        # Simplified SuperPoint implementation
-        class SimpleSuperPoint(nn.Module):
-            def __init__(self):
-                super().__init__()
-                # Simple CNN for feature detection
-                self.conv1 = nn.Conv2d(1, 64, 3, padding=1)
-                self.conv2 = nn.Conv2d(64, 64, 3, padding=1)
-                self.conv3 = nn.Conv2d(64, 256, 3, padding=1)
-                
-            def forward(self, x):
-                if x.shape[1] == 3:
-                    x = torch.mean(x, dim=1, keepdim=True)  # Convert to grayscale
-                x = torch.relu(self.conv1(x))
-                x = torch.relu(self.conv2(x))
-                x = self.conv3(x)
-                return x
-        
-        return SimpleSuperPoint().eval().to(self.device)
+        except ImportError as e:
+            raise ImportError(f"LightGlue SuperPoint not available: {e}. Install with: pip install -e .[lightglue]")
     
     def extract_features(self, images: List[Dict], batch_size: int = 8) -> Dict[str, Any]:
         """Extract SuperPoint features from images"""
@@ -118,31 +95,12 @@ class ALIKEDExtractor(BaseFeatureExtractor):
     """ALIKED feature extractor"""
     
     def _setup_model(self):
+        """Setup ALIKED model"""
         try:
+            from lightglue import ALIKED
             self.model = ALIKED(max_num_keypoints=2048).eval().to(self.device)
-        except NameError:
-            # Fallback implementation
-            self.model = self._create_aliked_fallback()
-    
-    def _create_aliked_fallback(self):
-        """Fallback ALIKED implementation"""
-        # Simplified ALIKED implementation
-        class SimpleALIKED(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.conv1 = nn.Conv2d(1, 64, 3, padding=1)
-                self.conv2 = nn.Conv2d(64, 128, 3, padding=1)
-                self.conv3 = nn.Conv2d(128, 256, 3, padding=1)
-                
-            def forward(self, x):
-                if x.shape[1] == 3:
-                    x = torch.mean(x, dim=1, keepdim=True)
-                x = torch.relu(self.conv1(x))
-                x = torch.relu(self.conv2(x))
-                x = self.conv3(x)
-                return x
-        
-        return SimpleALIKED().eval().to(self.device)
+        except ImportError as e:
+            raise ImportError(f"LightGlue ALIKED not available: {e}. Install with: pip install -e .[lightglue]")
     
     def extract_features(self, images: List[Dict], batch_size: int = 8) -> Dict[str, Any]:
         """Extract ALIKED features from images"""
@@ -181,31 +139,12 @@ class DISKExtractor(BaseFeatureExtractor):
     """DISK feature extractor"""
     
     def _setup_model(self):
+        """Setup DISK model"""
         try:
+            from lightglue import DISK
             self.model = DISK(max_num_keypoints=2048).eval().to(self.device)
-        except NameError:
-            # Fallback implementation
-            self.model = self._create_disk_fallback()
-    
-    def _create_disk_fallback(self):
-        """Fallback DISK implementation"""
-        # Simplified DISK implementation
-        class SimpleDISK(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.conv1 = nn.Conv2d(1, 64, 3, padding=1)
-                self.conv2 = nn.Conv2d(64, 128, 3, padding=1)
-                self.conv3 = nn.Conv2d(128, 256, 3, padding=1)
-                
-            def forward(self, x):
-                if x.shape[1] == 3:
-                    x = torch.mean(x, dim=1, keepdim=True)
-                x = torch.relu(self.conv1(x))
-                x = torch.relu(self.conv2(x))
-                x = self.conv3(x)
-                return x
-        
-        return SimpleDISK().eval().to(self.device)
+        except ImportError as e:
+            raise ImportError(f"LightGlue DISK not available: {e}. Install with: pip install -e .[lightglue]")
     
     def extract_features(self, images: List[Dict], batch_size: int = 8) -> Dict[str, Any]:
         """Extract DISK features from images"""
@@ -253,7 +192,7 @@ class FeatureExtractorFactory:
     def create(cls, extractor_type: str, device: torch.device) -> BaseFeatureExtractor:
         """Create a feature extractor instance"""
         if extractor_type not in cls._extractors:
-            raise ValueError(f"Unknown extractor type: {extractor_type}")
+            raise ValueError(f"Unknown extractor type: {extractor_type}. Available: {list(cls._extractors.keys())}")
         
         return cls._extractors[extractor_type](device)
     

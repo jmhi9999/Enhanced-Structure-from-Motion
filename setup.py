@@ -32,6 +32,7 @@ setup(
         "tqdm>=4.65.0",
         "matplotlib>=3.7.0",
         "kornia>=0.6.12",
+        "lightglue @ git+https://github.com/cvg/LightGlue.git",
         "numba>=0.58.0",
         "psutil>=5.9.0",
         "h5py>=3.8.0",
