@@ -10,17 +10,17 @@ from typing import Tuple, Optional, Dict, Any, Literal
 from enum import Enum
 import time
 
+# GPU modules - completely optional to avoid import issues
 try:
     import torch
     GPU_AVAILABLE = torch.cuda.is_available()
-    # Import GPU modules conditionally
-    if GPU_AVAILABLE:
-        try:
-            from .gpu_advanced_magsac import GPUAdvancedMAGSAC
-        except ImportError:
-            GPU_AVAILABLE = False
-            GPUAdvancedMAGSAC = None
-    else:
+    try:
+        # Only import if all GPU dependencies are available
+        import cupy
+        import faiss
+        from .gpu_advanced_magsac import GPUAdvancedMAGSAC
+    except (ImportError, AttributeError):
+        GPU_AVAILABLE = False
         GPUAdvancedMAGSAC = None
 except ImportError:
     GPU_AVAILABLE = False

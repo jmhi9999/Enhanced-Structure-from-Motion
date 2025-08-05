@@ -237,8 +237,12 @@ class GPUAdvancedMAGSAC:
         """CPU fallback for hypothesis generation"""
         
         # Convert to numpy for CPU processing
-        points1_np = cp.asnumpy(points1) if isinstance(points1, cp.ndarray) else points1
-        points2_np = cp.asnumpy(points2) if isinstance(points2, cp.ndarray) else points2
+        if CUPY_AVAILABLE and hasattr(cp, 'ndarray'):
+            points1_np = cp.asnumpy(points1) if isinstance(points1, cp.ndarray) else points1
+            points2_np = cp.asnumpy(points2) if isinstance(points2, cp.ndarray) else points2
+        else:
+            points1_np = points1
+            points2_np = points2
         
         num_points = len(points1_np)
         hypotheses = []
@@ -603,7 +607,7 @@ class GPUAdvancedMAGSAC:
         
         return valid_samples
     
-    def _estimate_noise_threshold_gpu(self, points1: cp.ndarray, points2: cp.ndarray) -> float:
+    def _estimate_noise_threshold_gpu(self, points1, points2) -> float:
         """Estimate noise threshold adaptively"""
         # Simplified threshold estimation
         # In practice, use more sophisticated methods
