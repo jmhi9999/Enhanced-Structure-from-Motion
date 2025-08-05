@@ -61,7 +61,7 @@ class GPUAdvancedMAGSAC:
         }
         
         # Memory management
-        self.memory_pool = cp.get_default_memory_pool() if self.use_gpu else None
+        self.memory_pool = cp.get_default_memory_pool() if (self.use_gpu and CUPY_AVAILABLE) else None
         
         logger.info(f"Advanced MAGSAC initialized with GPU: {self.use_gpu}")
     
@@ -80,7 +80,7 @@ class GPUAdvancedMAGSAC:
         points1_norm, T1 = self._normalize_points(points1)
         points2_norm, T2 = self._normalize_points(points2)
         
-        if self.use_gpu:
+        if self.use_gpu and CUPY_AVAILABLE:
             essential_matrix, inliers = self._gpu_magsac_essential(
                 points1_norm, points2_norm, T1, T2, intrinsics
             )
@@ -114,7 +114,7 @@ class GPUAdvancedMAGSAC:
         points1_norm, T1 = self._normalize_points(points1)
         points2_norm, T2 = self._normalize_points(points2)
         
-        if self.use_gpu:
+        if self.use_gpu and CUPY_AVAILABLE:
             fundamental_matrix, inliers = self._gpu_magsac_fundamental(
                 points1_norm, points2_norm, T1, T2
             )
@@ -201,8 +201,8 @@ class GPUAdvancedMAGSAC:
         
         return best_model, best_inliers
     
-    def _generate_essential_hypotheses_gpu(self, points1: cp.ndarray, points2: cp.ndarray,
-                                         batch_size: int) -> cp.ndarray:
+    def _generate_essential_hypotheses_gpu(self, points1, points2,
+                                         batch_size: int):
         """Generate batch of essential matrix hypotheses on GPU"""
         
         num_points = len(points1) 
@@ -232,8 +232,8 @@ class GPUAdvancedMAGSAC:
         
         return hypotheses
     
-    def _generate_essential_hypotheses_cpu(self, points1: cp.ndarray, points2: cp.ndarray,
-                                         batch_size: int) -> cp.ndarray:
+    def _generate_essential_hypotheses_cpu(self, points1, points2,
+                                         batch_size: int):
         """CPU fallback for hypothesis generation"""
         
         # Convert to numpy for CPU processing
@@ -431,8 +431,7 @@ class GPUAdvancedMAGSAC:
                 for j in range(3):
                     hypotheses[idx, i, j] /= norm_factor
     
-    def _evaluate_essential_hypotheses_gpu(self, hypotheses: cp.ndarray,
-                                         points1: cp.ndarray, points2: cp.ndarray) -> Tuple[cp.ndarray, cp.ndarray]:
+    def _evaluate_essential_hypotheses_gpu(self, hypotheses, points1, points2):
         """Evaluate batch of essential matrix hypotheses on GPU"""
         
         batch_size = hypotheses.shape[0]

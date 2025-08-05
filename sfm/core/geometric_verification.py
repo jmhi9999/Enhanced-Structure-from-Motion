@@ -12,8 +12,16 @@ import time
 
 try:
     import torch
-    from .gpu_advanced_magsac import GPUAdvancedMAGSAC
     GPU_AVAILABLE = torch.cuda.is_available()
+    # Import GPU modules conditionally
+    if GPU_AVAILABLE:
+        try:
+            from .gpu_advanced_magsac import GPUAdvancedMAGSAC
+        except ImportError:
+            GPU_AVAILABLE = False
+            GPUAdvancedMAGSAC = None
+    else:
+        GPUAdvancedMAGSAC = None
 except ImportError:
     GPU_AVAILABLE = False
     GPUAdvancedMAGSAC = None
