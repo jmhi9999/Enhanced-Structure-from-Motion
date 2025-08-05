@@ -260,4 +260,41 @@ class FeatureExtractorFactory:
     @classmethod
     def get_supported_extractors(cls) -> List[str]:
         """Get list of supported extractor types"""
-        return list(cls._extractors.keys()) 
+        return list(cls._extractors.keys())
+
+
+class FeatureExtractor:
+    """Main feature extractor class that wraps the factory"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.device = torch.device(config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
+        self.extractor_type = config.get('feature_extractor', 'superpoint')
+        self.max_keypoints = config.get('max_keypoints', 2048)
+        self.max_image_size = config.get('max_image_size', 1600)
+        
+        # Create the actual extractor
+        self.extractor = FeatureExtractorFactory.create(self.extractor_type, self.device)
+    
+    def extract(self, image_paths: List[str]) -> Dict[str, Any]:
+        """Extract features from images"""
+        # Load and preprocess images
+        images = []
+        for path in image_paths:
+            image = cv2.imread(str(path))
+            if image is not None:
+                # Resize if needed
+                if max(image.shape[:2]) > self.max_image_size:
+                    scale = self.max_image_size / max(image.shape[:2])
+                    new_size = (int(image.shape[1] * scale), int(image.shape[0] * scale))
+                    image = cv2.resize(image, new_size)
+                
+                images.append({
+                    'image': image,
+                    'path': path
+                })
+        
+        # Extract features
+        features = self.extractor.extract_features(images)
+        
+        return features 

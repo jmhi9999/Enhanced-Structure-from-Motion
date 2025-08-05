@@ -843,4 +843,36 @@ class IncrementalSfM:
                 y = (R[1, 2] + R[2, 1]) / S
                 z = 0.25 * S
         
-        return [w, x, y, z] 
+        return [w, x, y, z]
+
+
+class Reconstruction:
+    """Main reconstruction class that wraps the incremental SfM"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.device = torch.device(config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
+        self.max_image_size = config.get('max_image_size', 1600)
+        
+        # Create the actual reconstruction engine
+        self.reconstruction = IncrementalSfM(
+            device=self.device,
+            max_image_size=self.max_image_size
+        )
+    
+    def reconstruct(self, features: Dict[str, Any], matches: Dict[Tuple[str, str], Any]) -> Dict[str, Any]:
+        """Perform 3D reconstruction"""
+        # Extract image paths from features
+        image_paths = list(features.keys())
+        
+        # Run reconstruction
+        points3d, cameras, images = self.reconstruction.reconstruct(features, matches, image_paths)
+        
+        return {
+            'points3d': points3d,
+            'cameras': cameras,
+            'images': images,
+            'num_points': len(points3d),
+            'num_cameras': len(cameras),
+            'num_images': len(images)
+        } 

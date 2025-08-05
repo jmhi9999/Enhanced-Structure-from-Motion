@@ -308,4 +308,24 @@ class EnhancedLightGlueMatcher:
 
 
 # Keep backward compatibility
-LightGlueMatcher = EnhancedLightGlueMatcher 
+LightGlueMatcher = EnhancedLightGlueMatcher
+
+
+class FeatureMatcher:
+    """Main feature matcher class that wraps the enhanced matcher"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.device = torch.device(config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
+        self.use_vocabulary_tree = config.get('use_vocabulary_tree', True)
+        self.max_pairs_per_image = config.get('max_pairs_per_image', 20)
+        
+        # Create the actual matcher
+        self.matcher = EnhancedLightGlueMatcher(
+            device=self.device,
+            use_vocabulary_tree=self.use_vocabulary_tree
+        )
+    
+    def match(self, features: Dict[str, Any]) -> Dict[Tuple[str, str], Any]:
+        """Match features between images"""
+        return self.matcher.match_features(features) 
