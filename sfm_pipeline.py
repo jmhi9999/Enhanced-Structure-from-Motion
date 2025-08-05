@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""
+Enhanced SfM Pipeline for 3D Gaussian Splatting
+Optimized for high-quality camera poses and dense reconstruction
+"""
+
+import argparse
+import logging
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Dict, List, Any
+
+import torch
+import numpy as np
+from tqdm import tqdm
+
+# Import our enhanced SfM components
+from sfm.core.feature_extractor import FeatureExtractorFactory
+from sfm.core.feature_matcher import LightGlueMatcher
+from sfm.core.geometric_verification import GeometricVerification, RANSACMethod
+from sfm.core.reconstruction import IncrementalSfM
+from sfm.core.gpu_bundle_adjustment import GPUBundleAdjustment
+from sfm.core.dense_depth import DenseDepthEstimator
+from sfm.core.gpu_vocabulary_tree import GPUVocabularyTree
+from sfm.utils.io_utils import save_colmap_format, load_images, save_features, save_matches
+from sfm.utils.image_utils import resize_image
+
+logger = logging.getLogger(__name__)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Enhanced SfM Pipeline for 3DGS")
+    
+    # Input/Output
+    parser.add_argument("--input_dir", type=str, required=True,
+                       help="Directory containing input images")
+    parser.add_argument("--output_dir", type=str, required=True,
+                       help="Output directory for results")
+    
+    # Feature extraction
+    parser.add_argument("--feature_extractor", type=str, default="superpoint",
+                       choices=["superpoint", "aliked", "disk"],
+                       help="Feature extractor to use")
+    parser.add_argument("--max_image_size", type=int, default=1600,
+                       help="Maximum image size for processing")
+    parser.add_argument("--max_keypoints", type=int, default=4096,
+                       help="Maximum number of keypoints per image")
+    
+    # Matching and verification
+    parser.add_argument("--use_vocab_tree", action="store_true",
+                       help="Use vocabulary tree for smart pair selection")
+    parser.add_argument("--max_pairs_per_image", type=int, default=20,
+                       help="Maximum pairs per image for vocabulary tree")
+    
+    # Bundle adjustment
+    parser.add_argument("--use_gpu_ba", action="store_true",
+                       help="Use GPU-accelerated bundle adjustment")
+    parser.add_argument("--ba_max_iterations", type=int, default=200,
+                       help="Maximum iterations for bundle adjustment")
+    
+    # Dense reconstruction
+    parser.add_argument("--use_monocular_depth", action="store_true",
+                       help="Use monocular depth estimation")
+    parser.add_argument("--depth_model", type=str, default="dpt-large",
+                       help="Monocular depth model to use")
+    parser.add_argument("--fusion_weight", type=float, default=0.7,
+                       help="Weight for SfM vs monocular depth fusion")
+    parser.add_argument("--bilateral_filter", action="store_true",
+                       help="Apply bilateral filtering to depth maps")
+    
+    # Device and performance
+    parser.add_argument("--device", type=str, default="auto",
+                       help="Device to use (auto, cpu, cuda)")
+    parser.add_argument("--num_workers", type=int, default=4,
+                       help="Number of workers for parallel processing")
+    parser.add_argument("--batch_size", type=int, default=8,
+                       help="Batch size for feature extraction")
+    
+    # Quality settings for 3DGS
+    parser.add_argument("--high_quality", action="store_true",
+                       help="Enable high-quality mode for 3DGS")
+    parser.add_argument("--scale_recovery", action="store_true",
+                       help="Enable scale recovery for consistent scene scale")
+    
+    # Profiling
+    parser.add_argument("--profile", action="store_true",
+                       help="Enable performance profiling")
+    
+    return parser.parse_args()
+
+
+def setup_device(device_arg: str) -> torch.device:
+    """Setup device for computation"""
+    if device_arg == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(device_arg)
+    
+    logger.info(f"Using device: {device}")
+    if device.type == "cuda":
+        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+        logger.info(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+    
+    return device
+
+
+def setup_logging(output_dir: str):
+    """Setup logging configuration"""
+    log_file = Path(output_dir) / "sfm_pipeline.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
+
+def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
+    """Enhanced SfM pipeline for 3DGS - Main API function"""
+    
+    # Handle both command line args and direct function calls
+    if input_dir is None or output_dir is None:
+        # Command line mode
+        args = parse_args()
+        input_dir = args.input_dir
+        output_dir = args.output_dir
+        device = setup_device(args.device)
+        
+        # Convert args to kwargs for consistency
+        kwargs = {
+            'feature_extractor': args.feature_extractor,
+            'max_keypoints': args.max_keypoints,
+            'max_image_size': args.max_image_size,
+            'use_vocab_tree': args.use_vocab_tree,
+            'max_pairs_per_image': args.max_pairs_per_image,
+            'use_gpu_ba': args.use_gpu_ba,
+            'ba_max_iterations': args.ba_max_iterations,
+            'use_monocular_depth': args.use_monocular_depth,
+            'depth_model': args.depth_model,
+            'fusion_weight': getattr(args, 'fusion_weight', 0.7),
+            'bilateral_filter': getattr(args, 'bilateral_filter', False),
+            'scale_recovery': args.scale_recovery,
+            'high_quality': args.high_quality,
+            'device': args.device,
+            'num_workers': args.num_workers,
+            'batch_size': args.batch_size,
+            'profile': args.profile
+        }
+    else:
+        # Direct function call mode
+        device = setup_device(kwargs.get('device', 'auto'))
+    
+    # Setup
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    setup_logging(str(output_path))
+    
+    logger.info("=" * 60)
+    logger.info("Enhanced SfM Pipeline for 3D Gaussian Splatting")
+    logger.info("=" * 60)
+    logger.info(f"Input directory: {args.input_dir}")
+    logger.info(f"Output directory: {args.output_dir}")
+    logger.info(f"Feature extractor: {args.feature_extractor}")
+    logger.info(f"High quality mode: {args.high_quality}")
+    
+    # Performance tracking
+    start_time = time.time()
+    stage_times = {}
+    
+    # Stage 1: Load and preprocess images
+    logger.info("Stage 1: Loading and preprocessing images...")
+    stage_start = time.time()
+    
+    image_paths = load_images(input_dir)
+    logger.info(f"Found {len(image_paths)} images")
+    
+    # Resize images for processing
+    processed_images = {}
+    for img_path in tqdm(image_paths, desc="Preprocessing images"):
+        img = resize_image(img_path, kwargs.get('max_image_size', 1600))
+        processed_images[img_path] = img
+    
+    stage_times['preprocessing'] = time.time() - stage_start
+    logger.info(f"Preprocessing completed in {stage_times['preprocessing']:.2f}s")
+    
+    # Stage 2: Feature extraction
+    logger.info("Stage 2: Extracting features...")
+    stage_start = time.time()
+    
+    feature_extractor = FeatureExtractorFactory.create(
+        kwargs.get('feature_extractor', 'superpoint'),
+        device=device,
+        max_keypoints=kwargs.get('max_keypoints', 2048),
+        high_quality=kwargs.get('high_quality', True)
+    )
+    
+    features = feature_extractor.extract_features(
+        list(processed_images.keys()),
+        num_workers=kwargs.get('num_workers', 4),
+        batch_size=kwargs.get('batch_size', 8)
+    )
+    
+    # Save features
+    features_file = output_path / "features.h5"
+    save_features(features, features_file)
+    
+    stage_times['feature_extraction'] = time.time() - stage_start
+    logger.info(f"Feature extraction completed in {stage_times['feature_extraction']:.2f}s")
+    
+    # Stage 3: Smart pair selection (O(n log n) vs O(n²))
+    logger.info("Stage 3: Smart pair selection...")
+    stage_start = time.time()
+    
+    if kwargs.get('use_vocab_tree', True):
+        # Use vocabulary tree for O(n log n) complexity
+        vocab_tree = GPUVocabularyTree(
+            device=device,
+            vocab_size=10000,
+            depth=6,
+            branching_factor=10
+        )
+        
+        # Build vocabulary
+        vocab_tree.build_vocabulary(features)
+        
+        # Get smart pairs
+        image_pairs = vocab_tree.get_image_pairs_for_matching(
+            features,
+            max_pairs_per_image=kwargs.get('max_pairs_per_image', 20)
+        )
+        
+        logger.info(f"Selected {len(image_pairs)} pairs using vocabulary tree")
+    else:
+        # Fallback to exhaustive matching (slower)
+        image_pairs = [(img1, img2) for i, img1 in enumerate(image_paths) 
+                      for img2 in image_paths[i+1:]]
+        logger.info(f"Using exhaustive matching: {len(image_pairs)} pairs")
+    
+    stage_times['pair_selection'] = time.time() - stage_start
+    logger.info(f"Pair selection completed in {stage_times['pair_selection']:.2f}s")
+    
+    # Stage 4: Feature matching
+    logger.info("Stage 4: Feature matching...")
+    stage_start = time.time()
+    
+    matcher = LightGlueMatcher(device=device)
+    matches = {}
+    
+    for img1, img2 in tqdm(image_pairs, desc="Matching features"):
+        if img1 in features and img2 in features:
+            match_result = matcher.match_features(
+                features[img1], features[img2]
+            )
+            if match_result is not None:
+                matches[(img1, img2)] = match_result
+    
+    # Save matches
+    matches_file = output_path / "matches.h5"
+    save_matches(matches, matches_file)
+    
+    stage_times['feature_matching'] = time.time() - stage_start
+    logger.info(f"Feature matching completed in {stage_times['feature_matching']:.2f}s")
+    
+    # Stage 5: Geometric verification
+    logger.info("Stage 5: Geometric verification...")
+    stage_start = time.time()
+    
+    geometric_verifier = GeometricVerification(
+        method=RANSACMethod.OPENCV_MAGSAC,
+        device=device,
+        confidence=0.999,
+        max_iterations=5000,
+        threshold=1.0
+    )
+    
+    verified_matches = {}
+    for pair, match in tqdm(matches.items(), desc="Verifying matches"):
+        img1, img2 = pair
+        if img1 in features and img2 in features:
+            verified_match = geometric_verifier.verify_matches(
+                features[img1], features[img2], match
+            )
+            if verified_match is not None:
+                verified_matches[pair] = verified_match
+    
+    stage_times['geometric_verification'] = time.time() - stage_start
+    logger.info(f"Geometric verification completed in {stage_times['geometric_verification']:.2f}s")
+    
+    # Stage 6: Incremental SfM reconstruction
+    logger.info("Stage 6: Incremental SfM reconstruction...")
+    stage_start = time.time()
+    
+    reconstruction = IncrementalSfM(
+        device=device,
+        max_image_size=kwargs.get('max_image_size', 1600),
+        high_quality=kwargs.get('high_quality', True)
+    )
+    
+    sparse_points, cameras, images = reconstruction.reconstruct(
+        features=features,
+        matches=verified_matches,
+        image_paths=image_paths
+    )
+    
+    stage_times['sfm_reconstruction'] = time.time() - stage_start
+    logger.info(f"SfM reconstruction completed in {stage_times['sfm_reconstruction']:.2f}s")
+    
+    # Stage 7: GPU Bundle Adjustment (optional)
+    if kwargs.get('use_gpu_ba', False) and device.type == "cuda":
+        logger.info("Stage 7: GPU-accelerated bundle adjustment...")
+        stage_start = time.time()
+        
+        gpu_ba = GPUBundleAdjustment(
+            device=device,
+            max_iterations=kwargs.get('ba_max_iterations', 200),
+            high_quality=kwargs.get('high_quality', True)
+        )
+        
+        optimized_points, optimized_cameras, optimized_images = gpu_ba.optimize(
+            cameras, images, sparse_points, verified_matches
+        )
+        
+        # Update with optimized results
+        sparse_points = optimized_points
+        cameras = optimized_cameras
+        images = optimized_images
+        
+        stage_times['bundle_adjustment'] = time.time() - stage_start
+        logger.info(f"Bundle adjustment completed in {stage_times['bundle_adjustment']:.2f}s")
+    
+    # Stage 8: Dense depth estimation (for 3DGS)
+    if kwargs.get('use_monocular_depth', False):
+        logger.info("Stage 8: Dense depth estimation...")
+        stage_start = time.time()
+        
+        dense_estimator = DenseDepthEstimator(
+            device=device,
+            depth_model=kwargs.get('depth_model', 'dpt-large'),
+            high_quality=kwargs.get('high_quality', True)
+        )
+        
+        dense_depth_maps = dense_estimator.estimate_dense_depth(
+            sparse_points=sparse_points,
+            cameras=cameras,
+            images=images,
+            features=features
+        )
+        
+        # Save dense depth maps
+        depth_dir = output_path / "depth_maps"
+        depth_dir.mkdir(exist_ok=True)
+        dense_estimator.save_depth_maps(dense_depth_maps, str(depth_dir))
+        
+        stage_times['dense_depth'] = time.time() - stage_start
+        logger.info(f"Dense depth estimation completed in {stage_times['dense_depth']:.2f}s")
+    
+    # Stage 9: Scale recovery (for 3DGS consistency)
+    if kwargs.get('scale_recovery', False):
+        logger.info("Stage 9: Scale recovery...")
+        stage_start = time.time()
+        
+        # Apply global scale recovery for consistent scene scale
+        from sfm.core.scale_recovery import ScaleRecovery
+        scale_recovery = ScaleRecovery(device=device)
+        
+        scaled_points, scaled_cameras = scale_recovery.recover_scale(
+            sparse_points, cameras, images
+        )
+        
+        # Update with scaled results
+        sparse_points = scaled_points
+        cameras = scaled_cameras
+        
+        stage_times['scale_recovery'] = time.time() - stage_start
+        logger.info(f"Scale recovery completed in {stage_times['scale_recovery']:.2f}s")
+    
+    # Stage 10: Save results in COLMAP format (for 3DGS)
+    logger.info("Stage 10: Saving results...")
+    stage_start = time.time()
+    
+    # Save in COLMAP format for 3DGS compatibility
+    colmap_dir = output_path / "colmap"
+    colmap_dir.mkdir(exist_ok=True)
+    
+    save_colmap_format(
+        cameras=cameras,
+        images=images,
+        points3d=sparse_points,
+        output_dir=str(colmap_dir)
+    )
+    
+    # Save additional 3DGS-specific data
+    gs_data = {
+        'sparse_points': sparse_points,
+        'cameras': cameras,
+        'images': images,
+        'features': features,
+        'dense_depth_maps': dense_depth_maps if kwargs.get('use_monocular_depth', False) else None,
+        'scale_info': scale_recovery.get_scale_info() if kwargs.get('scale_recovery', False) else None
+    }
+    
+    import pickle
+    with open(output_path / "3dgs_data.pkl", 'wb') as f:
+        pickle.dump(gs_data, f)
+    
+    stage_times['saving'] = time.time() - stage_start
+    logger.info(f"Saving completed in {stage_times['saving']:.2f}s")
+    
+    # Final summary
+    total_time = time.time() - start_time
+    logger.info("=" * 60)
+    logger.info("ENHANCED SFM PIPELINE COMPLETED")
+    logger.info("=" * 60)
+    logger.info(f"Total time: {total_time:.2f}s")
+    logger.info(f"Number of images: {len(image_paths)}")
+    logger.info(f"Number of 3D points: {len(sparse_points)}")
+    logger.info(f"Number of cameras: {len(cameras)}")
+    
+    if kwargs.get('profile', False):
+        logger.info("\nPerformance breakdown:")
+        for stage, duration in stage_times.items():
+            percentage = (duration / total_time) * 100
+            logger.info(f"  {stage}: {duration:.2f}s ({percentage:.1f}%)")
+    
+    logger.info(f"\nResults saved to: {output_path}")
+    logger.info("Ready for 3D Gaussian Splatting!")
+    
+    return {
+        'sparse_points': sparse_points,
+        'cameras': cameras,
+        'images': images,
+        'features': features,
+        'dense_depth_maps': dense_depth_maps if kwargs.get('use_monocular_depth', False) else None,
+        'scale_info': scale_recovery.get_scale_info() if kwargs.get('scale_recovery', False) else None,
+        'total_time': total_time,
+        'stage_times': stage_times
+    }
+
+
+def main():
+    """Main entry point for command line usage"""
+    return sfm_pipeline()
+
+
+if __name__ == "__main__":
+    main() 
