@@ -78,12 +78,34 @@ pip install cupy-cuda12x faiss-gpu pyceres
 
 ## 🚀 Quick Start
 
-### Basic Usage for 3DGS
-```bash
-# Activate environment
-source activate_env.sh
+### 1. High-Level API (Recommended)
+```python
+from enhanced_sfm import quick_sfm, high_quality_sfm
 
-# Run basic SfM for 3DGS
+# Quick processing
+results = quick_sfm("data/images", "results/quick")
+
+# High-quality processing for 3DGS
+results = high_quality_sfm("data/images", "results/high_quality")
+```
+
+### 2. Core Functions (hloc-style)
+```python
+from sfm import extract_features, match_features, reconstruct_3d
+
+# Extract features
+features = extract_features(["image1.jpg", "image2.jpg"])
+
+# Match features  
+matches = match_features(features)
+
+# 3D reconstruction
+reconstruction = reconstruct_3d(features, matches)
+```
+
+### 3. Command Line Interface
+```bash
+# Basic SfM for 3DGS
 python sfm_pipeline.py \
   --input_dir data/images \
   --output_dir results \
@@ -92,7 +114,7 @@ python sfm_pipeline.py \
   --use_monocular_depth
 ```
 
-### High-Quality Mode for 3DGS
+### 4. High-Quality Mode for 3DGS
 ```bash
 python sfm_pipeline.py \
   --input_dir data/images \
@@ -104,14 +126,6 @@ python sfm_pipeline.py \
   --high_quality \
   --scale_recovery \
   --profile
-```
-
-### Benchmark Against hloc
-```bash
-python benchmark_comparison.py \
-  --dataset data/images \
-  --output benchmark_results \
-  --max_images 100
 ```
 
 ## ⚡ Performance Features
