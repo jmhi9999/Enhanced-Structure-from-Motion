@@ -14,10 +14,17 @@ import time
 
 try:
     from lightglue import LightGlue, SuperPoint, ALIKED, DISK
+    LIGHTGLUE_AVAILABLE = True
 except ImportError:
-    print("Warning: LightGlue not installed. Using fallback implementation.")
+    LIGHTGLUE_AVAILABLE = False
+    LightGlue = SuperPoint = ALIKED = DISK = None
 
-from .gpu_vocabulary_tree import GPUVocabularyTree
+try:
+    from .gpu_vocabulary_tree import GPUVocabularyTree
+    GPU_VOCAB_AVAILABLE = True
+except ImportError:
+    GPU_VOCAB_AVAILABLE = False
+    GPUVocabularyTree = None
 
 logger = logging.getLogger(__name__)
 

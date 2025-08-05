@@ -4,8 +4,15 @@ Faster and more robust than OpenCV's MAGSAC and hloc's RANSAC
 """
 
 import torch
-import cupy as cp
 import numpy as np
+
+# GPU dependencies - optional imports
+try:
+    import cupy as cp
+    CUPY_AVAILABLE = True
+except ImportError:
+    CUPY_AVAILABLE = False
+    cp = None
 from typing import Tuple, Optional, Dict, Any, List
 import logging
 from numba import cuda, jit, prange

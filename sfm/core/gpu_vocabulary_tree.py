@@ -4,9 +4,22 @@ Designed to outperform hloc's brute-force matching with O(n log n) complexity
 """
 
 import torch
-import cupy as cp
 import numpy as np
-import faiss
+
+# GPU dependencies - optional imports
+try:
+    import cupy as cp
+    CUPY_AVAILABLE = True
+except ImportError:
+    CUPY_AVAILABLE = False
+    cp = None
+
+try:
+    import faiss
+    FAISS_AVAILABLE = True
+except ImportError:
+    FAISS_AVAILABLE = False
+    faiss = None
 from typing import Dict, List, Tuple, Any, Optional, Set
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -33,6 +46,9 @@ class GPUVocabularyTree:
     
     def __init__(self, device: torch.device, vocab_size: int = 10000, 
                  depth: int = 6, branching_factor: int = 10):
+        if not CUPY_AVAILABLE or not FAISS_AVAILABLE:
+            raise ImportError("GPU dependencies not available. Install with: pip install -e .[gpu]")
+        
         self.device = device
         self.vocab_size = vocab_size
         self.depth = depth

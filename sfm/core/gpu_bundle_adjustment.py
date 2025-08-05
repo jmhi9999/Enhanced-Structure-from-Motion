@@ -4,9 +4,22 @@ Designed to be faster than hloc's bundle adjustment
 """
 
 import torch
-import cupy as cp
 import numpy as np
-import pyceres
+
+# GPU dependencies - optional imports
+try:
+    import cupy as cp
+    CUPY_AVAILABLE = True
+except ImportError:
+    CUPY_AVAILABLE = False
+    cp = None
+
+try:
+    import pyceres
+    PYCERES_AVAILABLE = True
+except ImportError:
+    PYCERES_AVAILABLE = False
+    pyceres = None
 from typing import Dict, List, Tuple, Any, Optional
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
