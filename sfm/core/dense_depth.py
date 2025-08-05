@@ -14,13 +14,15 @@ import requests
 from PIL import Image
 import torchvision.transforms as transforms
 
-# Import transformers for depth estimation
+# Import transformers for depth estimation - completely optional
 try:
     from transformers import DPTFeatureExtractor, DPTForDepthEstimation
     DEPTH_MODEL_AVAILABLE = True
-except ImportError:
+except (ImportError, TypeError, AttributeError) as e:
     DEPTH_MODEL_AVAILABLE = False
-    print("Warning: DPT depth model not available, using fallback")
+    DPTFeatureExtractor = None
+    DPTForDepthEstimation = None
+    # Silently handle the import error to avoid breaking the whole library
 
 
 class DenseDepthEstimator:

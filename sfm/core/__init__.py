@@ -7,7 +7,13 @@ from .feature_extractor import FeatureExtractor
 from .feature_matcher import FeatureMatcher
 from .geometric_verification import GeometricVerification
 from .reconstruction import Reconstruction
-from .dense_depth import DenseDepthEstimator
+# Dense depth - optional import to avoid transformer dependency issues
+try:
+    from .dense_depth import DenseDepthEstimator
+    DENSE_DEPTH_AVAILABLE = True
+except (ImportError, TypeError, AttributeError):
+    DENSE_DEPTH_AVAILABLE = False
+    DenseDepthEstimator = None
 from .scale_recovery import ScaleRecovery
 from .distributed_processor import DistributedProcessor
 
@@ -63,6 +69,8 @@ def reconstruct_3d(features, matches, config=None):
 
 def estimate_dense_depth(images, config=None):
     """Estimate dense depth maps"""
+    if not DENSE_DEPTH_AVAILABLE:
+        raise ImportError("Dense depth estimation not available. Install with: pip install transformers")
     depth_estimator = DenseDepthEstimator(config or {})
     return depth_estimator.estimate(images)
 
@@ -78,7 +86,6 @@ __all__ = [
     "FeatureMatcher", 
     "GeometricVerification",
     "Reconstruction",
-    "DenseDepthEstimator",
     "ScaleRecovery",
     "DistributedProcessor",
     # Convenience functions
@@ -87,9 +94,12 @@ __all__ = [
     "verify_geometry",
     "bundle_adjustment",
     "reconstruct_3d",
-    "estimate_dense_depth",
     "recover_scale"
 ]
+
+# Add optional modules if available
+if DENSE_DEPTH_AVAILABLE:
+    __all__.extend(["DenseDepthEstimator", "estimate_dense_depth"])
 
 # Add GPU classes if available
 if GPU_MAGSAC_AVAILABLE:
