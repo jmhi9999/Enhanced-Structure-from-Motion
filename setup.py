@@ -45,17 +45,6 @@ setup(
             "cupy-cuda12x>=12.0.0",  # For CUDA 12.x
             "faiss-gpu>=1.7.4",
         ],
-        "lightglue": [
-            "git+https://github.com/cvg/LightGlue.git",
-        ],
-        "hloc": [
-            "git+https://github.com/cvg/Hierarchical-Localization/",
-        ],
-        "full": [
-            "git+https://github.com/cvg/LightGlue.git",
-            "cupy-cuda12x>=12.0.0",
-            "faiss-gpu>=1.7.4",
-        ],
     },
     entry_points={
         "console_scripts": [
