@@ -53,10 +53,12 @@ class SuperPointExtractor(BaseFeatureExtractor):
     def _setup_model(self):
         """Setup SuperPoint model"""
         try:
-            from lightglue import SuperPoint
+            # Import only SuperPoint, avoid SIFT module that needs pycolmap
+            import lightglue
+            from lightglue.superpoint import SuperPoint
             self.model = SuperPoint(max_num_keypoints=2048).eval().to(self.device)
         except ImportError as e:
-            raise ImportError(f"LightGlue SuperPoint not available: {e}. Install with: pip install -e .[lightglue]")
+            raise ImportError(f"LightGlue SuperPoint not available: {e}. Try: conda install -c conda-forge pycolmap")
     
     def extract_features(self, images: List[Dict], batch_size: int = 8) -> Dict[str, Any]:
         """Extract SuperPoint features from images"""
@@ -97,10 +99,10 @@ class ALIKEDExtractor(BaseFeatureExtractor):
     def _setup_model(self):
         """Setup ALIKED model"""
         try:
-            from lightglue import ALIKED
+            from lightglue.aliked import ALIKED
             self.model = ALIKED(max_num_keypoints=2048).eval().to(self.device)
         except ImportError as e:
-            raise ImportError(f"LightGlue ALIKED not available: {e}. Install with: pip install -e .[lightglue]")
+            raise ImportError(f"LightGlue ALIKED not available: {e}. Try: conda install -c conda-forge pycolmap")
     
     def extract_features(self, images: List[Dict], batch_size: int = 8) -> Dict[str, Any]:
         """Extract ALIKED features from images"""
@@ -141,10 +143,10 @@ class DISKExtractor(BaseFeatureExtractor):
     def _setup_model(self):
         """Setup DISK model"""
         try:
-            from lightglue import DISK
+            from lightglue.disk import DISK
             self.model = DISK(max_num_keypoints=2048).eval().to(self.device)
         except ImportError as e:
-            raise ImportError(f"LightGlue DISK not available: {e}. Install with: pip install -e .[lightglue]")
+            raise ImportError(f"LightGlue DISK not available: {e}. Try: conda install -c conda-forge pycolmap")
     
     def extract_features(self, images: List[Dict], batch_size: int = 8) -> Dict[str, Any]:
         """Extract DISK features from images"""
