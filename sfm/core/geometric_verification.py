@@ -235,16 +235,40 @@ class GeometricVerification:
                                points2: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """Find fundamental matrix using OpenCV MAGSAC"""
         
-        F, mask = cv2.findFundamentalMat(
-            points1, points2,
-            method=cv2.USAC_MAGSAC,
-            ransacReprojThreshold=self.threshold,
-            confidence=self.confidence,
-            maxIters=self.max_iterations
-        )
+        # Validate input points
+        if len(points1) < 8 or len(points2) < 8:
+            logger.warning(f"Not enough points for fundamental matrix: {len(points1)}")
+            return None, None
+            
+        # Ensure points are in the right format (N, 2)
+        points1 = np.asarray(points1, dtype=np.float32).reshape(-1, 2)
+        points2 = np.asarray(points2, dtype=np.float32).reshape(-1, 2)
         
-        inliers = mask.flatten().astype(bool) if mask is not None else None
-        return F, inliers
+        # Check for degenerate cases (all points on a line)
+        if len(np.unique(points1, axis=0)) < 8 or len(np.unique(points2, axis=0)) < 8:
+            logger.warning("Too many duplicate points for fundamental matrix estimation")
+            return None, None
+            
+        try:
+            F, mask = cv2.findFundamentalMat(
+                points1, points2,
+                method=cv2.USAC_MAGSAC,
+                ransacReprojThreshold=self.threshold,
+                confidence=self.confidence,
+                maxIters=self.max_iterations
+            )
+            
+            # Check if F is valid
+            if F is None or F.size == 0:
+                logger.warning("OpenCV fundamental matrix estimation returned empty result")
+                return None, None
+                
+            inliers = mask.flatten().astype(bool) if mask is not None else None
+            return F, inliers
+            
+        except cv2.error as e:
+            logger.warning(f"OpenCV fundamental matrix failed: {e}")
+            return None, None
     
     def _find_essential_pyransac(self, 
                                points1: np.ndarray, 
@@ -372,7 +396,7 @@ class GeometricVerification:
                 # Find fundamental matrix and inliers
                 F, inliers = self.find_fundamental_matrix(points0, points1)
                 
-                if F is not None and inliers is not None:
+                if F is not None and inliers is not None and np.sum(inliers) >= self.min_matches:
                     # Filter matches to keep only inliers
                     inlier_matches0 = matches0[inliers]
                     inlier_matches1 = matches1[inliers]

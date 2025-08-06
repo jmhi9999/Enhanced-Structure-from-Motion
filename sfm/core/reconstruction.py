@@ -124,14 +124,19 @@ class IncrementalSfM:
         # Recover pose
         _, R, t, mask = cv2.recoverPose(E, matched_kpts1, matched_kpts2, mask=mask)
         
-        # Initialize cameras
+        # Initialize cameras with better focal length estimation
         camera_id = 0
+        width = features[img1_path]['image_shape'][1]
+        height = features[img1_path]['image_shape'][0]
+        
+        # Estimate focal length as 1.2 * max(width, height) (common heuristic)
+        focal_length = 1.2 * max(width, height)
+        
         self.cameras[camera_id] = {
             'model': 'SIMPLE_PINHOLE',
-            'width': features[img1_path]['image_shape'][1],
-            'height': features[img1_path]['image_shape'][0],
-            'params': [1000.0, features[img1_path]['image_shape'][1] / 2, 
-                      features[img1_path]['image_shape'][0] / 2]
+            'width': width,
+            'height': height,
+            'params': [focal_length, width / 2.0, height / 2.0]
         }
         
         # Initialize images
@@ -194,9 +199,16 @@ class IncrementalSfM:
             raise ValueError("Not enough 2D-3D correspondences")
         
         # Estimate camera pose using PnP with MAGSAC
+        # Construct K from SIMPLE_PINHOLE params [f, cx, cy]
+        camera_params = self.cameras[0]['params']
+        f, cx, cy = camera_params[0], camera_params[1], camera_params[2]
+        K = np.array([[f, 0, cx],
+                      [0, f, cy], 
+                      [0, 0, 1]])
+        
         success, rvec, tvec, inliers = cv2.solvePnPRansac(
             points3d, points2d,
-            np.array(self.cameras[0]['params'][:3]).reshape(3, 3),
+            K,
             None,
             flags=cv2.SOLVEPNP_ITERATIVE
         )
@@ -261,8 +273,12 @@ class IncrementalSfM:
     def _triangulate_initial_points(self, kpts1: np.ndarray, kpts2: np.ndarray,
                                   R: np.ndarray, t: np.ndarray, mask: np.ndarray):
         """Triangulate initial 3D points"""
-        # Camera matrices
-        K = np.array(self.cameras[0]['params'][:3]).reshape(3, 3)
+        # Camera matrices - construct K from SIMPLE_PINHOLE params [f, cx, cy]
+        camera_params = self.cameras[0]['params']
+        f, cx, cy = camera_params[0], camera_params[1], camera_params[2]
+        K = np.array([[f, 0, cx],
+                      [0, f, cy], 
+                      [0, 0, 1]])
         P1 = K @ np.hstack([np.eye(3), np.zeros((3, 1))])
         P2 = K @ np.hstack([R, t])
         
