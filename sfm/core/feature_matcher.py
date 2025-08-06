@@ -41,22 +41,23 @@ class EnhancedLightGlueMatcher:
     5. Memory-efficient batch processing
     """
     
-    def __init__(self, device: torch.device, use_vocabulary_tree: bool = True, feature_type: str = 'superpoint'):
+    def __init__(self, device: torch.device, use_vocabulary_tree: bool = True, feature_type: str = 'superpoint', config: Dict[str, Any] = None):
         self.device = device
         self.matcher = None
         self.use_vocabulary_tree = use_vocabulary_tree
         self.feature_type = feature_type
+        self.config = config or {}
         
         # Initialize vocabulary tree for efficient pair selection
         if self.use_vocabulary_tree:
-            self.vocabulary_tree = GPUVocabularyTree(device)
+            self.vocabulary_tree = GPUVocabularyTree(device, config)
         else:
             self.vocabulary_tree = None
         
         # Performance parameters
-        self.max_pairs_per_image = 20  # Reduce from O(n²) to O(n)
-        self.parallel_workers = min(8, torch.get_num_threads())
-        self.batch_size = 32
+        self.max_pairs_per_image = self.config.get('max_pairs_per_image', 20)
+        self.parallel_workers = min(self.config.get('parallel_workers', 8), torch.get_num_threads())
+        self.batch_size = self.config.get('batch_size', 32)
         
         # Timing statistics
         self.timing_stats = {
@@ -233,13 +234,19 @@ class EnhancedLightGlueMatcher:
         """Match features between a single pair of images"""
         try:
             # Prepare data for LightGlue
+            # Create dummy image tensors (LightGlue might need them for some operations)
+            h0, w0 = feat1['image_shape']
+            h1, w1 = feat2['image_shape']
+            
             data = {
                 'keypoints0': torch.from_numpy(feat1['keypoints']).float().to(self.device),
                 'keypoints1': torch.from_numpy(feat2['keypoints']).float().to(self.device),
                 'descriptors0': torch.from_numpy(feat1['descriptors']).float().to(self.device),
                 'descriptors1': torch.from_numpy(feat2['descriptors']).float().to(self.device),
-                'image_size0': torch.tensor(feat1['image_shape'][::-1]).float().to(self.device),
-                'image_size1': torch.tensor(feat2['image_shape'][::-1]).float().to(self.device)
+                'image_size0': torch.tensor([w0, h0]).float().to(self.device),
+                'image_size1': torch.tensor([w1, h1]).float().to(self.device),
+                'image0': torch.zeros(1, 1, h0, w0).to(self.device),  # Dummy image tensor
+                'image1': torch.zeros(1, 1, h1, w1).to(self.device)   # Dummy image tensor
             }
             
             # Match features
@@ -333,7 +340,8 @@ class FeatureMatcher:
         self.matcher = EnhancedLightGlueMatcher(
             device=self.device,
             use_vocabulary_tree=self.use_vocabulary_tree,
-            feature_type=feature_type
+            feature_type=feature_type,
+            config=config
         )
     
     def match(self, features: Dict[str, Any]) -> Dict[Tuple[str, str], Any]:

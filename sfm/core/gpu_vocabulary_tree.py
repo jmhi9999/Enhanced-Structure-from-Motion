@@ -44,15 +44,15 @@ class GPUVocabularyTree:
     5. Async processing for concurrent operations
     """
     
-    def __init__(self, device: torch.device, vocab_size: int = 10000, 
-                 depth: int = 6, branching_factor: int = 10):
+    def __init__(self, device: torch.device, config: Dict[str, Any] = None):
         if not CUPY_AVAILABLE or not FAISS_AVAILABLE:
             raise ImportError("GPU dependencies not available. Install with: pip install -e .[gpu]")
         
+        config = config or {}
         self.device = device
-        self.vocab_size = vocab_size
-        self.depth = depth
-        self.branching_factor = branching_factor
+        self.vocab_size = config.get('vocab_size', 10000)
+        self.depth = config.get('vocab_depth', 6)
+        self.branching_factor = config.get('vocab_branching_factor', 10)
         
         # FAISS GPU index for fast similarity search
         self.use_gpu = torch.cuda.is_available() and device.type == 'cuda'
@@ -215,7 +215,7 @@ class GPUVocabularyTree:
                     continue
                 
                 # Run k-means clustering
-                centers, assignments = self._gpu_kmeans(node_desc, self.branching_factor)
+                centers, assignments, actual_k = self._gpu_kmeans(node_desc, self.branching_factor)
                 
                 # Store node information
                 vocabulary['nodes'][node_id] = {
@@ -225,9 +225,9 @@ class GPUVocabularyTree:
                     'children': []
                 }
                 
-                # Create child nodes
-                for child_idx in range(self.branching_factor):
-                    child_id = node_id * self.branching_factor + child_idx + 1
+                # Create child nodes (use actual_k instead of branching_factor)
+                for child_idx in range(actual_k):
+                    child_id = node_id * actual_k + child_idx + 1
                     vocabulary['nodes'][node_id]['children'].append(child_id)
                     
                     # Get descriptors assigned to this child
@@ -257,6 +257,16 @@ class GPUVocabularyTree:
     def _gpu_kmeans(self, descriptors: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
         """GPU-accelerated k-means clustering using FAISS"""
         try:
+            # Adjust k if not enough descriptors
+            min_points_per_cluster = 39  # FAISS recommendation
+            required_points = k * min_points_per_cluster
+            
+            if len(descriptors) < required_points:
+                # Reduce k to have at least 39 points per cluster
+                k = max(2, len(descriptors) // min_points_per_cluster)
+                if k < 2:
+                    k = 2  # Minimum clusters
+            
             # Use FAISS GPU k-means for speed
             d = descriptors.shape[1]
             kmeans = faiss.Kmeans(d, k, niter=20, verbose=False, gpu=self.use_gpu)
@@ -270,11 +280,12 @@ class GPUVocabularyTree:
             _, assignments = kmeans.index.search(descriptors, 1)
             assignments = assignments.flatten()
             
-            return kmeans.centroids, assignments
+            return kmeans.centroids, assignments, k
             
         except Exception as e:
             logger.warning(f"GPU k-means failed, using CPU fallback: {e}")
-            return self._cpu_kmeans_fallback(descriptors, k)
+            centers, assignments = self._cpu_kmeans_fallback(descriptors, k)
+            return centers, assignments, k
     
     def _cpu_kmeans_fallback(self, descriptors: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
         """CPU fallback for k-means clustering"""

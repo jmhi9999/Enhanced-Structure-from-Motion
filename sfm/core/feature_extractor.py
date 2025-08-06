@@ -17,8 +17,9 @@ from pathlib import Path
 class BaseFeatureExtractor(ABC):
     """Base class for feature extractors"""
     
-    def __init__(self, device: torch.device):
+    def __init__(self, device: torch.device, config: Dict[str, Any] = None):
         self.device = device
+        self.config = config or {}
         self.model = None
         self._setup_model()
     
@@ -56,7 +57,8 @@ class SuperPointExtractor(BaseFeatureExtractor):
             # Import only SuperPoint, avoid SIFT module that needs pycolmap
             import lightglue
             from lightglue.superpoint import SuperPoint
-            self.model = SuperPoint(max_num_keypoints=2048).eval().to(self.device)
+            max_keypoints = self.config.get('max_num_keypoints', 2048)
+            self.model = SuperPoint(max_num_keypoints=max_keypoints).eval().to(self.device)
         except ImportError as e:
             raise ImportError(f"LightGlue SuperPoint not available: {e}. Try: conda install -c conda-forge pycolmap")
     
@@ -102,7 +104,8 @@ class ALIKEDExtractor(BaseFeatureExtractor):
         """Setup ALIKED model"""
         try:
             from lightglue.aliked import ALIKED
-            self.model = ALIKED(max_num_keypoints=2048).eval().to(self.device)
+            max_keypoints = self.config.get('max_num_keypoints', 2048)
+            self.model = ALIKED(max_num_keypoints=max_keypoints).eval().to(self.device)
         except ImportError as e:
             raise ImportError(f"LightGlue ALIKED not available: {e}. Try: conda install -c conda-forge pycolmap")
     
@@ -148,7 +151,8 @@ class DISKExtractor(BaseFeatureExtractor):
         """Setup DISK model"""
         try:
             from lightglue.disk import DISK
-            self.model = DISK(max_num_keypoints=2048).eval().to(self.device)
+            max_keypoints = self.config.get('max_num_keypoints', 2048)
+            self.model = DISK(max_num_keypoints=max_keypoints).eval().to(self.device)
         except ImportError as e:
             raise ImportError(f"LightGlue DISK not available: {e}. Try: conda install -c conda-forge pycolmap")
     
@@ -197,12 +201,12 @@ class FeatureExtractorFactory:
     }
     
     @classmethod
-    def create(cls, extractor_type: str, device: torch.device) -> BaseFeatureExtractor:
+    def create(cls, extractor_type: str, device: torch.device, config: Dict[str, Any] = None) -> BaseFeatureExtractor:
         """Create a feature extractor instance"""
         if extractor_type not in cls._extractors:
             raise ValueError(f"Unknown extractor type: {extractor_type}. Available: {list(cls._extractors.keys())}")
         
-        return cls._extractors[extractor_type](device)
+        return cls._extractors[extractor_type](device, config)
     
     @classmethod
     def get_supported_extractors(cls) -> List[str]:
@@ -221,7 +225,7 @@ class FeatureExtractor:
         self.max_image_size = config.get('max_image_size', 1600)
         
         # Create the actual extractor
-        self.extractor = FeatureExtractorFactory.create(self.extractor_type, self.device)
+        self.extractor = FeatureExtractorFactory.create(self.extractor_type, self.device, self.config)
     
     def extract(self, image_paths: List[str]) -> Dict[str, Any]:
         """Extract features from images"""
