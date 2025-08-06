@@ -409,6 +409,69 @@ class GeometricVerification:
         
         return methods
     
+    def verify_matches(self, feat1: Dict[str, Any], feat2: Dict[str, Any], match_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Verify matches between two images using geometric verification
+        
+        Args:
+            feat1: Features from first image
+            feat2: Features from second image
+            match_data: Match data containing matches0, matches1, etc.
+            
+        Returns:
+            Verified match data with inliers only, or None if verification fails
+        """
+        try:
+            # Get matched keypoints
+            kpts0 = feat1['keypoints']
+            kpts1 = feat2['keypoints']
+            matches0 = match_data['matches0']
+            matches1 = match_data['matches1']
+            
+            # Extract corresponding points
+            if len(matches0) < self.min_matches:
+                logger.debug(f"Not enough matches: {len(matches0)} < {self.min_matches}")
+                return None
+                
+            points0 = kpts0[matches0]
+            points1 = kpts1[matches1]
+            
+            # Find fundamental matrix and inliers
+            F, inliers = self.find_fundamental_matrix(points0, points1)
+            
+            if F is not None and inliers is not None and np.sum(inliers) >= self.min_matches:
+                # Filter matches to keep only inliers
+                inlier_matches0 = matches0[inliers]
+                inlier_matches1 = matches1[inliers]
+                
+                # Update scores if they exist
+                inlier_scores0 = match_data.get('mscores0', np.ones(len(matches0)))[inliers]
+                inlier_scores1 = match_data.get('mscores1', np.ones(len(matches1)))[inliers]
+                
+                # Create verified match data
+                verified_match = {
+                    'keypoints0': kpts0,
+                    'keypoints1': kpts1,
+                    'matches0': inlier_matches0,
+                    'matches1': inlier_matches1,
+                    'mscores0': inlier_scores0,
+                    'mscores1': inlier_scores1,
+                    'fundamental_matrix': F,
+                    'inliers': inliers,
+                    'image_shape0': match_data.get('image_shape0'),
+                    'image_shape1': match_data.get('image_shape1')
+                }
+                
+                logger.debug(f"Verified matches: {len(inlier_matches0)}/{len(matches0)} inliers")
+                return verified_match
+            else:
+                logger.debug("Geometric verification failed")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"Failed to verify matches: {e}")
+            return None
+
     def verify(self, matches: Dict[Tuple[str, str], Any]) -> Dict[Tuple[str, str], Any]:
         """
         Verify matches geometrically using RANSAC-based methods

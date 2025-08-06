@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 # Import our enhanced SfM components
 from sfm.core.feature_extractor import FeatureExtractorFactory
-from sfm.core.feature_matcher import LightGlueMatcher
+from sfm.core.feature_matcher import EnhancedLightGlueMatcher
 from sfm.core.geometric_verification import GeometricVerification, RANSACMethod
 from sfm.core.reconstruction import IncrementalSfM
 from sfm.core.gpu_bundle_adjustment import GPUBundleAdjustment
@@ -200,25 +200,63 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info("Stage 2: Extracting features...")
     stage_start = time.time()
     
-    feature_extractor = FeatureExtractorFactory.create(
-        kwargs.get('feature_extractor', 'superpoint'),
-        device=device,
-        max_keypoints=kwargs.get('max_keypoints', 2048),
-        high_quality=kwargs.get('high_quality', True)
-    )
-    
-    features = feature_extractor.extract_features(
-        list(processed_images.keys()),
-        num_workers=kwargs.get('num_workers', 4),
-        batch_size=kwargs.get('batch_size', 8)
-    )
-    
-    # Save features
+    # Check if features already exist
     features_file = output_path / "features.h5"
-    save_features(features, features_file)
+    features_tensor_file = output_path / "features_tensors.pt"
     
-    stage_times['feature_extraction'] = time.time() - stage_start
-    logger.info(f"Feature extraction completed in {stage_times['feature_extraction']:.2f}s")
+    if features_file.exists() and features_tensor_file.exists():
+        try:
+            # Load existing features and validate
+            from sfm.utils.io_utils import load_features
+            existing_features = load_features(features_file)
+            existing_tensors = torch.load(features_tensor_file, map_location=device)
+            
+            if len(existing_features) == len(processed_images):
+                logger.info(f"Found existing features for {len(existing_features)} images, skipping extraction")
+                features = existing_features
+                # Also store tensor data for later use
+                features_tensors = existing_tensors
+                stage_times['feature_extraction'] = 0.0
+            else:
+                logger.info(f"Feature count mismatch: {len(existing_features)} vs {len(processed_images)}, re-extracting")
+                raise ValueError("Feature count mismatch")
+        except Exception as e:
+            logger.info(f"Could not load existing features ({e}), extracting new ones")
+            features = None
+    else:
+        features = None
+    
+    if features is None:
+        feature_extractor = FeatureExtractorFactory.create(
+            kwargs.get('feature_extractor', 'superpoint'),
+            device=device,
+            max_keypoints=kwargs.get('max_keypoints', 2048),
+            high_quality=kwargs.get('high_quality', True)
+        )
+        
+        features = feature_extractor.extract_features(
+            list(processed_images.keys()),
+            num_workers=kwargs.get('num_workers', 4),
+            batch_size=kwargs.get('batch_size', 8)
+        )
+        
+        # Save features (traditional format)
+        save_features(features, features_file)
+        
+        # Save features as tensors for backup and later use
+        features_tensors = {}
+        for img_path, feat_data in features.items():
+            features_tensors[img_path] = {
+                'keypoints': torch.from_numpy(feat_data['keypoints']).to(device),
+                'descriptors': torch.from_numpy(feat_data['descriptors']).to(device),
+                'scores': torch.from_numpy(feat_data['scores']).to(device),
+                'image_shape': feat_data['image_shape']
+            }
+        torch.save(features_tensors, features_tensor_file)
+        logger.info(f"Saved feature tensors to {features_tensor_file}")
+        
+        stage_times['feature_extraction'] = time.time() - stage_start
+        logger.info(f"Feature extraction completed in {stage_times['feature_extraction']:.2f}s")
     
     # Stage 3: Smart pair selection (O(n log n) vs O(n²))
     logger.info("Stage 3: Smart pair selection...")
@@ -256,48 +294,142 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info("Stage 4: Feature matching...")
     stage_start = time.time()
     
-    matcher = LightGlueMatcher(device=device)
-    matches = {}
-    
-    for img1, img2 in tqdm(image_pairs, desc="Matching features"):
-        if img1 in features and img2 in features:
-            match_result = matcher.match_features(
-                features[img1], features[img2]
-            )
-            if match_result is not None:
-                matches[(img1, img2)] = match_result
-    
-    # Save matches
+    # Check if matches already exist
     matches_file = output_path / "matches.h5"
-    save_matches(matches, matches_file)
+    matches_tensor_file = output_path / "matches_tensors.pt"
     
-    stage_times['feature_matching'] = time.time() - stage_start
-    logger.info(f"Feature matching completed in {stage_times['feature_matching']:.2f}s")
+    # Calculate expected number of matches for validation
+    expected_pairs = len(image_pairs)
+    
+    if matches_file.exists() and matches_tensor_file.exists():
+        try:
+            # Load existing matches and validate
+            from sfm.utils.io_utils import load_matches
+            existing_matches = load_matches(matches_file)
+            existing_match_tensors = torch.load(matches_tensor_file, map_location=device)
+            
+            # Check if we have reasonable number of matches
+            if len(existing_matches) >= expected_pairs * 0.1:  # At least 10% success rate
+                logger.info(f"Found existing matches for {len(existing_matches)} pairs (expected ~{expected_pairs}), skipping matching")
+                matches = existing_matches
+                matches_tensors = existing_match_tensors
+                stage_times['feature_matching'] = 0.0
+            else:
+                logger.info(f"Match count too low: {len(existing_matches)} vs expected ~{expected_pairs}, re-matching")
+                raise ValueError("Match count too low")
+        except Exception as e:
+            logger.info(f"Could not load existing matches ({e}), matching new ones")
+            matches = None
+    else:
+        matches = None
+    
+    if matches is None:
+        matcher = EnhancedLightGlueMatcher(device=device)
+        
+        # Use the enhanced matcher which processes all features at once
+        matches = matcher.match_features(features)
+        
+        # Create tensor version for backup
+        matches_tensors = {}
+        for pair, match_result in matches.items():
+            matches_tensors[pair] = {
+                'matches0': torch.from_numpy(match_result['matches0']).to(device),
+                'matches1': torch.from_numpy(match_result['matches1']).to(device),
+                'mscores0': torch.from_numpy(match_result['mscores0']).to(device),
+                'mscores1': torch.from_numpy(match_result['mscores1']).to(device),
+                'image_shape0': match_result['image_shape0'],
+                'image_shape1': match_result['image_shape1']
+            }
+        
+        # Save matches (traditional format)
+        save_matches(matches, matches_file)
+        
+        # Save matches as tensors for backup
+        torch.save(matches_tensors, matches_tensor_file)
+        logger.info(f"Saved match tensors to {matches_tensor_file}")
+        
+        stage_times['feature_matching'] = time.time() - stage_start
+        logger.info(f"Feature matching completed in {stage_times['feature_matching']:.2f}s")
     
     # Stage 5: Geometric verification
     logger.info("Stage 5: Geometric verification...")
     stage_start = time.time()
     
-    geometric_verifier = GeometricVerification(
-        method=RANSACMethod.OPENCV_MAGSAC,
-        device=device,
-        confidence=0.999,
-        max_iterations=5000,
-        threshold=1.0
-    )
+    # Check if verified matches already exist
+    verified_matches_file = output_path / "verified_matches.h5"
+    verified_tensors_file = output_path / "verified_tensors.pt"
     
-    verified_matches = {}
-    for pair, match in tqdm(matches.items(), desc="Verifying matches"):
-        img1, img2 = pair
-        if img1 in features and img2 in features:
-            verified_match = geometric_verifier.verify_matches(
-                features[img1], features[img2], match
-            )
-            if verified_match is not None:
-                verified_matches[pair] = verified_match
+    # Calculate expected number of verified matches
+    expected_verified = len(matches) * 0.5  # Expect ~50% to pass geometric verification
     
-    stage_times['geometric_verification'] = time.time() - stage_start
-    logger.info(f"Geometric verification completed in {stage_times['geometric_verification']:.2f}s")
+    if verified_matches_file.exists() and verified_tensors_file.exists():
+        try:
+            # Load existing verified matches
+            verified_matches = torch.load(verified_matches_file, map_location='cpu')
+            verified_tensors = torch.load(verified_tensors_file, map_location=device)
+            
+            # Convert tensor dict back to numpy format for compatibility
+            verified_matches_numpy = {}
+            for pair, tensor_data in verified_matches.items():
+                verified_matches_numpy[pair] = {
+                    k: v.cpu().numpy() if torch.is_tensor(v) else v 
+                    for k, v in tensor_data.items()
+                }
+            
+            # Check if we have reasonable number of verified matches
+            if len(verified_matches) >= expected_verified * 0.5:  # At least 25% of original matches
+                logger.info(f"Found existing verified matches for {len(verified_matches)} pairs (expected ~{int(expected_verified)}), skipping verification")
+                verified_matches = verified_matches_numpy
+                stage_times['geometric_verification'] = 0.0
+            else:
+                logger.info(f"Verified match count too low: {len(verified_matches)} vs expected ~{int(expected_verified)}, re-verifying")
+                raise ValueError("Verified match count too low")
+        except Exception as e:
+            logger.info(f"Could not load existing verified matches ({e}), verifying new ones")
+            verified_matches = None
+    else:
+        verified_matches = None
+    
+    if verified_matches is None:
+        geometric_verifier = GeometricVerification(
+            method=RANSACMethod.OPENCV_MAGSAC,
+            device=device,
+            confidence=0.999,
+            max_iterations=5000,
+            threshold=1.0
+        )
+        
+        verified_matches = {}
+        verified_tensors = {}
+        
+        for pair, match in tqdm(matches.items(), desc="Verifying matches"):
+            img1, img2 = pair
+            if img1 in features and img2 in features:
+                verified_match = geometric_verifier.verify_matches(
+                    features[img1], features[img2], match
+                )
+                if verified_match is not None:
+                    verified_matches[pair] = verified_match
+                    
+                    # Store tensor version for backup
+                    verified_tensors[pair] = {
+                        'matches0': torch.from_numpy(verified_match['matches0']).to(device),
+                        'matches1': torch.from_numpy(verified_match['matches1']).to(device),
+                        'mscores0': torch.from_numpy(verified_match['mscores0']).to(device),
+                        'mscores1': torch.from_numpy(verified_match['mscores1']).to(device),
+                        'fundamental_matrix': torch.from_numpy(verified_match['fundamental_matrix']).to(device) if verified_match.get('fundamental_matrix') is not None else None,
+                        'inliers': torch.from_numpy(verified_match['inliers']).to(device) if verified_match.get('inliers') is not None else None,
+                        'image_shape0': verified_match['image_shape0'],
+                        'image_shape1': verified_match['image_shape1']
+                    }
+        
+        # Save verified matches in tensor format (more compact)
+        torch.save(verified_matches, verified_matches_file)
+        torch.save(verified_tensors, verified_tensors_file)
+        logger.info(f"Saved verified match tensors to {verified_tensors_file}")
+        
+        stage_times['geometric_verification'] = time.time() - stage_start
+        logger.info(f"Geometric verification completed in {stage_times['geometric_verification']:.2f}s")
     
     # Stage 6: Incremental SfM reconstruction
     logger.info("Stage 6: Incremental SfM reconstruction...")

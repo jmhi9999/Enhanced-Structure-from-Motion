@@ -329,4 +329,89 @@ def load_points3d_bin(filepath: Path) -> Dict:
 
 
 # Import struct for binary operations
-import struct 
+import struct
+
+
+def load_images(input_dir: str) -> List[str]:
+    """Load image paths from directory"""
+    input_path = Path(input_dir)
+    image_extensions = {'.jpg', '.jpeg', '.png', '.tiff', '.bmp'}
+    
+    image_paths = []
+    for ext in image_extensions:
+        image_paths.extend(input_path.glob(f"*{ext}"))
+        image_paths.extend(input_path.glob(f"*{ext.upper()}"))
+    
+    return sorted([str(p) for p in image_paths])
+
+
+def save_features(features: Dict[str, Any], filepath: Path):
+    """Save features in H5 format"""
+    import h5py
+    
+    with h5py.File(filepath, 'w') as f:
+        for img_path, feat_data in features.items():
+            grp = f.create_group(str(img_path))
+            grp.create_dataset('keypoints', data=feat_data['keypoints'])
+            grp.create_dataset('descriptors', data=feat_data['descriptors'])
+            grp.create_dataset('scores', data=feat_data['scores'])
+            grp.attrs['image_shape'] = feat_data['image_shape']
+
+
+def load_features(filepath: Path) -> Dict[str, Any]:
+    """Load features from H5 format"""
+    import h5py
+    
+    features = {}
+    with h5py.File(filepath, 'r') as f:
+        for img_path in f.keys():
+            grp = f[img_path]
+            features[img_path] = {
+                'keypoints': grp['keypoints'][:],
+                'descriptors': grp['descriptors'][:],
+                'scores': grp['scores'][:],
+                'image_shape': tuple(grp.attrs['image_shape'])
+            }
+    
+    return features
+
+
+def save_matches(matches: Dict[Tuple[str, str], Any], filepath: Path):
+    """Save matches in H5 format"""
+    import h5py
+    
+    with h5py.File(filepath, 'w') as f:
+        for i, (pair, match_data) in enumerate(matches.items()):
+            grp = f.create_group(f'match_{i}')
+            grp.attrs['img1'] = pair[0]
+            grp.attrs['img2'] = pair[1]
+            
+            for key, value in match_data.items():
+                if isinstance(value, np.ndarray):
+                    grp.create_dataset(key, data=value)
+                else:
+                    grp.attrs[key] = value
+
+
+def load_matches(filepath: Path) -> Dict[Tuple[str, str], Any]:
+    """Load matches from H5 format"""
+    import h5py
+    
+    matches = {}
+    with h5py.File(filepath, 'r') as f:
+        for group_name in f.keys():
+            grp = f[group_name]
+            img1 = grp.attrs['img1']
+            img2 = grp.attrs['img2']
+            
+            match_data = {}
+            for key in grp.keys():
+                match_data[key] = grp[key][:]
+            
+            for attr_key in grp.attrs.keys():
+                if attr_key not in ['img1', 'img2']:
+                    match_data[attr_key] = grp.attrs[attr_key]
+            
+            matches[(img1, img2)] = match_data
+    
+    return matches 
