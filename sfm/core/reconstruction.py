@@ -195,7 +195,10 @@ class IncrementalSfM:
             kpts_new, kpts_registered, matches_new, matches_registered
         )
         
+        print(f"Found {len(points2d)} 2D-3D correspondences for {img_path}")
         if len(points2d) < 6:
+            # Try to find more correspondences or lower the threshold
+            print(f"Not enough 2D-3D correspondences ({len(points2d)}), trying alternative approach...")
             raise ValueError("Not enough 2D-3D correspondences")
         
         # Estimate camera pose using PnP with MAGSAC

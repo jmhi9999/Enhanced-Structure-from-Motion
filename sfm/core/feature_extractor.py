@@ -61,8 +61,8 @@ class SuperPointExtractor(BaseFeatureExtractor):
             # SuperPoint configuration matching the provided format
             superpoint_conf = {
                 "nms_radius": self.config.get('nms_radius', 4),
-                "keypoint_threshold": self.config.get('keypoint_threshold', 0.003),  # Lower threshold for more keypoints
-                "max_keypoints": self.config.get('max_keypoints', 4096),  # Set reasonable max limit
+                "keypoint_threshold": self.config.get('keypoint_threshold', 0.005),  
+                "max_keypoints": self.config.get('max_keypoints', 4096),  
                 "remove_borders": self.config.get('remove_borders', 4),
                 "fix_sampling": self.config.get('fix_sampling', False),
             }
@@ -92,7 +92,6 @@ class SuperPointExtractor(BaseFeatureExtractor):
                 
                 # Extract features
                 with torch.no_grad():
-                    # SuperPoint expects a dictionary with 'image' key
                     input_data = {'image': image_tensor}
                     pred = self.model(input_data)
                 

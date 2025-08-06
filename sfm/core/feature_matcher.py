@@ -95,41 +95,6 @@ class EnhancedLightGlueMatcher:
             # Fallback implementation
             self.matcher = self._create_fallback_matcher()
     
-    def _create_fallback_matcher(self):
-        """Fallback matcher implementation"""
-        class SimpleMatcher:
-            def __init__(self):
-                self.device = self.device
-                
-            def match(self, data):
-                # Simple feature matching using OpenCV
-                kpts0, kpts1 = data['keypoints0'], data['keypoints1']
-                desc0, desc1 = data['descriptors0'], data['descriptors1']
-                
-                # Use FLANN matcher
-                FLANN_INDEX_KDTREE = 1
-                index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-                search_params = dict(checks=50)
-                flann = cv2.FlannBasedMatcher(index_params, search_params)
-                
-                matches = flann.knnMatch(desc0, desc1, k=2)
-                
-                # Apply ratio test
-                good_matches = []
-                for match_pair in matches:
-                    if len(match_pair) == 2:
-                        m, n = match_pair
-                        if m.distance < 0.7 * n.distance:
-                            good_matches.append(m)
-                
-                return {
-                    'matches0': [m.queryIdx for m in good_matches],
-                    'matches1': [m.trainIdx for m in good_matches],
-                    'mscores0': [1.0 - m.distance / 1000.0 for m in good_matches],
-                    'mscores1': [1.0 - m.distance / 1000.0 for m in good_matches]
-                }
-        
-        return SimpleMatcher()
     
     def match_features(self, features: Dict[str, Any]) -> Dict[Tuple[str, str], Any]:
         """

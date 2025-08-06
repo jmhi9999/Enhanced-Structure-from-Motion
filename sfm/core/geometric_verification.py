@@ -244,10 +244,36 @@ class GeometricVerification:
         points1 = np.asarray(points1, dtype=np.float32).reshape(-1, 2)
         points2 = np.asarray(points2, dtype=np.float32).reshape(-1, 2)
         
-        # Check for degenerate cases (all points on a line)
-        if len(np.unique(points1, axis=0)) < 8 or len(np.unique(points2, axis=0)) < 8:
-            logger.warning("Too many duplicate points for fundamental matrix estimation")
+        # Check for degenerate cases but be more lenient
+        unique_points1 = len(np.unique(points1, axis=0))
+        unique_points2 = len(np.unique(points2, axis=0))
+        if unique_points1 < 8 or unique_points2 < 8:
+            logger.warning(f"Not enough unique points: {unique_points1}/{len(points1)}, {unique_points2}/{len(points2)}")
             return None, None
+            
+        # Check for reasonable point distribution
+        if unique_points1 < len(points1) * 0.5 or unique_points2 < len(points2) * 0.5:
+            logger.warning(f"Too many duplicate points (>50%): {unique_points1}/{len(points1)}, {unique_points2}/{len(points2)}")
+            # Try with a more robust method or lower threshold
+            try:
+                F, mask = cv2.findFundamentalMat(
+                    points1, points2,
+                    method=cv2.USAC_MAGSAC,
+                    ransacReprojThreshold=self.threshold * 2,  # Double threshold
+                    confidence=0.95,  # Lower confidence
+                    maxIters=self.max_iterations * 2  # More iterations
+                )
+                
+                if F is None or F.size == 0:
+                    logger.warning("Even with relaxed parameters, fundamental matrix estimation failed")
+                    return None, None
+                    
+                inliers = mask.flatten().astype(bool) if mask is not None else None
+                return F, inliers
+                
+            except cv2.error as e:
+                logger.warning(f"Relaxed fundamental matrix estimation also failed: {e}")
+                return None, None
             
         try:
             F, mask = cv2.findFundamentalMat(
