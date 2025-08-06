@@ -59,6 +59,10 @@ class EnhancedLightGlueMatcher:
         self.parallel_workers = min(self.config.get('parallel_workers', 8), torch.get_num_threads())
         self.batch_size = self.config.get('batch_size', 32)
         
+        # Matching parameters
+        self.confidence_threshold = self.config.get('confidence_threshold', 0.2)
+        self.min_matches = self.config.get('min_matches', 8)
+        
         # Timing statistics
         self.timing_stats = {
             'pair_selection': [],
@@ -71,8 +75,22 @@ class EnhancedLightGlueMatcher:
     def _setup_matcher(self):
         """Setup LightGlue matcher"""
         try:
+            # LightGlue configuration matching the provided format
+            lightglue_conf = {
+                "features": self.feature_type,
+                "depth_confidence": self.config.get('depth_confidence', 0.95),
+                "width_confidence": self.config.get('width_confidence', 0.99),
+                "compile": self.config.get('compile', False),
+            }
+            
             # LightGlue supports multiple extractors dynamically
-            self.matcher = LightGlue(features=self.feature_type).eval().to(self.device)
+            self.matcher = LightGlue(features=lightglue_conf["features"], 
+                                   depth_confidence=lightglue_conf["depth_confidence"],
+                                   width_confidence=lightglue_conf["width_confidence"]).eval().to(self.device)
+            
+            if lightglue_conf["compile"]:
+                self.matcher.compile()
+                
         except NameError:
             # Fallback implementation
             self.matcher = self._create_fallback_matcher()
@@ -293,18 +311,14 @@ class EnhancedLightGlueMatcher:
             logger.debug(f"Final kpts0 shape: {kpts0.shape}, desc0 shape: {desc0.shape}")
             logger.debug(f"Final kpts1 shape: {kpts1.shape}, desc1 shape: {desc1.shape}")
             
-            # LightGlue expects the data in this specific format
+            # LightGlue expects flat keys format with transposed descriptors
             data = {
-                "image0": {
-                    "keypoints": kpts0,
-                    "descriptors": desc0,
-                    "image_size": torch.tensor([w0, h0]).float().to(self.device),
-                },
-                "image1": {
-                    "keypoints": kpts1, 
-                    "descriptors": desc1,
-                    "image_size": torch.tensor([w1, h1]).float().to(self.device),
-                }
+                "keypoints0": kpts0,
+                "descriptors0": desc0.transpose(-1, -2),  # LightGlue expects transposed descriptors
+                "keypoints1": kpts1,
+                "descriptors1": desc1.transpose(-1, -2),  # LightGlue expects transposed descriptors
+                "image0": torch.zeros(1, 1, h0, w0).to(self.device),  # Dummy image tensor if needed
+                "image1": torch.zeros(1, 1, h1, w1).to(self.device)   # Dummy image tensor if needed
             }
             
             # Match features
@@ -313,8 +327,8 @@ class EnhancedLightGlueMatcher:
                     pred = self.matcher(data)
                 except Exception as e:
                     logger.error(f"LightGlue matcher failed: {e}")
-                    logger.error(f"Data shapes - kpts0: {data['image0']['keypoints'].shape}, kpts1: {data['image1']['keypoints'].shape}")
-                    logger.error(f"Data shapes - desc0: {data['image0']['descriptors'].shape}, desc1: {data['image1']['descriptors'].shape}")
+                    logger.error(f"Data shapes - kpts0: {data['keypoints0'].shape}, kpts1: {data['keypoints1'].shape}")
+                    logger.error(f"Data shapes - desc0: {data['descriptors0'].shape}, desc1: {data['descriptors1'].shape}")
                     raise e
             
             # Convert to numpy arrays - handle LightGlue output format
@@ -389,8 +403,7 @@ class EnhancedLightGlueMatcher:
             
             # Filter matches based on confidence
             if len(scores) > 0:
-                confidence_threshold = 0.2
-                confident_matches = scores > confidence_threshold
+                confident_matches = scores > self.confidence_threshold
                 
                 matches['matches0'] = matches['matches0'][confident_matches]
                 matches['matches1'] = matches['matches1'][confident_matches]
@@ -398,7 +411,7 @@ class EnhancedLightGlueMatcher:
                 matches['mscores1'] = matches['mscores1'][confident_matches]
             
             # Only return if we have enough matches
-            if len(matches['matches0']) >= 8:
+            if len(matches['matches0']) >= self.min_matches:
                 return matches
             else:
                 return None

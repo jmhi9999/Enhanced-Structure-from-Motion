@@ -77,17 +77,20 @@ class GeometricVerification:
             self.confidence = config.get('confidence', 0.999)
             self.max_iterations = config.get('max_iterations', 10000)
             self.threshold = config.get('threshold', 1.0)
+            self.min_matches = config.get('min_matches', 8)
         elif config_or_method is None or isinstance(config_or_method, RANSACMethod):
             self.method = config_or_method or RANSACMethod.OPENCV_MAGSAC
             self.confidence = kwargs.get('confidence', 0.999)
             self.max_iterations = kwargs.get('max_iterations', 10000)
             self.threshold = kwargs.get('threshold', 1.0)
+            self.min_matches = kwargs.get('min_matches', 8)
         else:
             # Fallback to default
             self.method = RANSACMethod.OPENCV_MAGSAC
             self.confidence = kwargs.get('confidence', 0.999)
             self.max_iterations = kwargs.get('max_iterations', 10000)
             self.threshold = kwargs.get('threshold', 1.0)
+            self.min_matches = kwargs.get('min_matches', 8)
         
         self.device = device or (torch.device('cuda') if GPU_AVAILABLE else torch.device('cpu'))
         
@@ -336,6 +339,75 @@ class GeometricVerification:
         
         return methods
     
+    def verify(self, matches: Dict[Tuple[str, str], Any]) -> Dict[Tuple[str, str], Any]:
+        """
+        Verify matches geometrically using RANSAC-based methods
+        
+        Args:
+            matches: Dictionary of matches from feature matching
+            
+        Returns:
+            Dictionary of verified matches with inliers only
+        """
+        verified_matches = {}
+        
+        logger.info(f"Verifying {len(matches)} image pairs...")
+        
+        for pair, match_data in matches.items():
+            try:
+                # Get matched keypoints
+                kpts0 = match_data['keypoints0']
+                kpts1 = match_data['keypoints1']
+                matches0 = match_data['matches0']
+                matches1 = match_data['matches1']
+                
+                # Extract corresponding points
+                if len(matches0) < self.min_matches:
+                    logger.debug(f"Skipping pair {pair}: not enough matches ({len(matches0)})")
+                    continue
+                    
+                points0 = kpts0[matches0]
+                points1 = kpts1[matches1]
+                
+                # Find fundamental matrix and inliers
+                F, inliers = self.find_fundamental_matrix(points0, points1)
+                
+                if F is not None and inliers is not None:
+                    # Filter matches to keep only inliers
+                    inlier_matches0 = matches0[inliers]
+                    inlier_matches1 = matches1[inliers]
+                    
+                    # Update scores if they exist
+                    inlier_scores0 = match_data.get('mscores0', np.ones(len(matches0)))[inliers]
+                    inlier_scores1 = match_data.get('mscores1', np.ones(len(matches1)))[inliers]
+                    
+                    # Create verified match data
+                    verified_match = {
+                        'keypoints0': kpts0,
+                        'keypoints1': kpts1,
+                        'matches0': inlier_matches0,
+                        'matches1': inlier_matches1,
+                        'mscores0': inlier_scores0,
+                        'mscores1': inlier_scores1,
+                        'fundamental_matrix': F,
+                        'inliers': inliers,
+                        'image_shape0': match_data.get('image_shape0'),
+                        'image_shape1': match_data.get('image_shape1')
+                    }
+                    
+                    verified_matches[pair] = verified_match
+                    
+                    logger.debug(f"Pair {pair}: {len(inlier_matches0)}/{len(matches0)} inliers")
+                else:
+                    logger.debug(f"Pair {pair}: geometric verification failed")
+                    
+            except Exception as e:
+                logger.warning(f"Failed to verify pair {pair}: {e}")
+                continue
+        
+        logger.info(f"Verified {len(verified_matches)}/{len(matches)} pairs successfully")
+        return verified_matches
+
     @staticmethod
     def recommend_method(num_points: int, has_gpu: bool = None) -> RANSACMethod:
         """

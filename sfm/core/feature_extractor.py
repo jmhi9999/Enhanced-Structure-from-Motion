@@ -57,8 +57,22 @@ class SuperPointExtractor(BaseFeatureExtractor):
             # Import only SuperPoint, avoid SIFT module that needs pycolmap
             import lightglue
             from lightglue.superpoint import SuperPoint
-            max_keypoints = self.config.get('max_num_keypoints', 4096)
-            self.model = SuperPoint(max_num_keypoints=max_keypoints).eval().to(self.device)
+            
+            # SuperPoint configuration matching the provided format
+            superpoint_conf = {
+                "nms_radius": self.config.get('nms_radius', 4),
+                "keypoint_threshold": self.config.get('keypoint_threshold', 0.005),
+                "max_keypoints": self.config.get('max_keypoints', -1),
+                "remove_borders": self.config.get('remove_borders', 4),
+                "fix_sampling": self.config.get('fix_sampling', False),
+            }
+            
+            self.model = SuperPoint(
+                nms_radius=superpoint_conf["nms_radius"],
+                keypoint_threshold=superpoint_conf["keypoint_threshold"],
+                max_keypoints=superpoint_conf["max_keypoints"],
+                remove_borders=superpoint_conf["remove_borders"]
+            ).eval().to(self.device)
         except ImportError as e:
             raise ImportError(f"LightGlue SuperPoint not available: {e}. Try: conda install -c conda-forge pycolmap")
     
@@ -104,8 +118,21 @@ class ALIKEDExtractor(BaseFeatureExtractor):
         """Setup ALIKED model"""
         try:
             from lightglue.aliked import ALIKED
-            max_keypoints = self.config.get('max_num_keypoints', 2048)
-            self.model = ALIKED(max_num_keypoints=max_keypoints).eval().to(self.device)
+            
+            # ALIKED configuration matching the provided format
+            aliked_conf = {
+                "model_name": self.config.get('model_name', 'aliked-n16'),
+                "max_num_keypoints": self.config.get('max_num_keypoints', -1),
+                "detection_threshold": self.config.get('detection_threshold', 0.2),
+                "nms_radius": self.config.get('nms_radius', 2),
+            }
+            
+            self.model = ALIKED(
+                model_name=aliked_conf["model_name"],
+                max_num_keypoints=aliked_conf["max_num_keypoints"],
+                detection_threshold=aliked_conf["detection_threshold"],
+                nms_radius=aliked_conf["nms_radius"]
+            ).eval().to(self.device)
         except ImportError as e:
             raise ImportError(f"LightGlue ALIKED not available: {e}. Try: conda install -c conda-forge pycolmap")
     
@@ -151,8 +178,23 @@ class DISKExtractor(BaseFeatureExtractor):
         """Setup DISK model"""
         try:
             from lightglue.disk import DISK
-            max_keypoints = self.config.get('max_num_keypoints', 2048)
-            self.model = DISK(max_num_keypoints=max_keypoints).eval().to(self.device)
+            
+            # DISK configuration matching the provided format
+            disk_conf = {
+                "weights": self.config.get('weights', 'depth'),
+                "max_keypoints": self.config.get('max_keypoints', None),
+                "nms_window_size": self.config.get('nms_window_size', 5),
+                "detection_threshold": self.config.get('detection_threshold', 0.0),
+                "pad_if_not_divisible": self.config.get('pad_if_not_divisible', True),
+            }
+            
+            self.model = DISK(
+                weights=disk_conf["weights"],
+                max_keypoints=disk_conf["max_keypoints"],
+                nms_window_size=disk_conf["nms_window_size"],
+                detection_threshold=disk_conf["detection_threshold"],
+                pad_if_not_divisible=disk_conf["pad_if_not_divisible"]
+            ).eval().to(self.device)
         except ImportError as e:
             raise ImportError(f"LightGlue DISK not available: {e}. Try: conda install -c conda-forge pycolmap")
     
