@@ -75,7 +75,16 @@ class GPUVocabularyTree:
     def _setup_gpu_resources(self):
         """Setup GPU resources for FAISS"""
         try:
-            self.gpu_resource = faiss.StandardGpuResources()
+            # Try different ways to initialize GPU resources
+            if hasattr(faiss, 'StandardGpuResources'):
+                self.gpu_resource = faiss.StandardGpuResources()
+            elif hasattr(faiss, 'GpuResources'):
+                self.gpu_resource = faiss.GpuResources()
+            else:
+                # Fallback: just use GPU without explicit resource management
+                self.gpu_resource = None
+                logger.info("Using GPU without explicit resource management")
+                return
             logger.info("GPU resources initialized for vocabulary tree")
         except Exception as e:
             logger.warning(f"Failed to initialize GPU resources: {e}")
