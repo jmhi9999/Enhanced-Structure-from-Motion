@@ -348,10 +348,10 @@ class GPUBruteForceMatcher:
                     scores_tensor = pred.get('scores', None)
                     
                     # Remove batch dimensions
-                    while matches_tensor.dim() > 2:
+                    while matches_tensor.dim > 2:
                         matches_tensor = matches_tensor.squeeze(0)
                     if scores_tensor is not None:
-                        while scores_tensor.dim() > 1:
+                        while scores_tensor.dim > 1:
                             scores_tensor = scores_tensor.squeeze(0)
                     
                     if matches_tensor.shape[0] > 0:
