@@ -257,8 +257,8 @@ class GPUVocabularyTree:
     def _gpu_kmeans(self, descriptors: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray, int]:
         """GPU-accelerated k-means clustering using FAISS"""
         try:
-            # Adjust k if not enough descriptors - FAISS needs at least 39 points per cluster
-            min_points_per_cluster = 39  # FAISS recommendation  
+            # Adjust k if not enough descriptors - Reduce requirement for small datasets
+            min_points_per_cluster = 10  # Reduced from 39 for small datasets  
             required_points = k * min_points_per_cluster
             
             if len(descriptors) < required_points:
@@ -268,7 +268,7 @@ class GPUVocabularyTree:
                     k = optimal_k
                 
                 # If still not enough points, fall back to CPU k-means
-                if len(descriptors) < min_points_per_cluster:
+                if len(descriptors) < 5:  # Very minimal requirement
                     logger.warning(f"Not enough points ({len(descriptors)}) for GPU clustering, using CPU fallback")
                     centers, assignments = self._cpu_kmeans_fallback(descriptors, min(k, len(descriptors)))
                     return centers, assignments, len(centers)

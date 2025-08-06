@@ -296,29 +296,41 @@ class EnhancedLightGlueMatcher:
             if kpts1.dim() == 2:  # [N, 2] -> [1, N, 2]
                 kpts1 = kpts1.unsqueeze(0)
             
-            # Ensure descriptors have correct shape: [1, N, D] for LightGlue
+            # Ensure descriptors have correct shape for LightGlue: [1, N, D] before transpose
             if desc0.dim() == 1:
                 desc0 = desc0.unsqueeze(0)
-            if desc0.dim() == 2:  # [N, D] -> [1, N, D]
-                desc0 = desc0.unsqueeze(0)
+            if desc0.dim() == 2:  
+                if desc0.shape[0] > desc0.shape[1]:
+                    # If shape is [N, D], add batch dimension -> [1, N, D]
+                    desc0 = desc0.unsqueeze(0)
+                else:
+                    # If shape is [D, N], transpose and add batch dim -> [1, N, D]
+                    desc0 = desc0.transpose(0, 1).unsqueeze(0)
                 
             if desc1.dim() == 1:
                 desc1 = desc1.unsqueeze(0)
-            if desc1.dim() == 2:  # [N, D] -> [1, N, D]
-                desc1 = desc1.unsqueeze(0)
+            if desc1.dim() == 2:  
+                if desc1.shape[0] > desc1.shape[1]:
+                    # If shape is [N, D], add batch dimension -> [1, N, D]
+                    desc1 = desc1.unsqueeze(0)
+                else:
+                    # If shape is [D, N], transpose and add batch dim -> [1, N, D]
+                    desc1 = desc1.transpose(0, 1).unsqueeze(0)
             
             # Final shape validation
             logger.debug(f"Final kpts0 shape: {kpts0.shape}, desc0 shape: {desc0.shape}")
             logger.debug(f"Final kpts1 shape: {kpts1.shape}, desc1 shape: {desc1.shape}")
             
-            # LightGlue expects flat keys format with transposed descriptors
+            # LightGlue expects nested format
             data = {
-                "keypoints0": kpts0,
-                "descriptors0": desc0.transpose(-1, -2),  # LightGlue expects transposed descriptors
-                "keypoints1": kpts1,
-                "descriptors1": desc1.transpose(-1, -2),  # LightGlue expects transposed descriptors
-                "image0": torch.zeros(1, 1, h0, w0).to(self.device),  # Dummy image tensor if needed
-                "image1": torch.zeros(1, 1, h1, w1).to(self.device)   # Dummy image tensor if needed
+                "image0": {
+                    "keypoints": kpts0,
+                    "descriptors": desc0,  # Already in correct shape [1, N, D]
+                },
+                "image1": {
+                    "keypoints": kpts1,
+                    "descriptors": desc1,  # Already in correct shape [1, N, D]
+                }
             }
             
             # Match features
@@ -327,8 +339,8 @@ class EnhancedLightGlueMatcher:
                     pred = self.matcher(data)
                 except Exception as e:
                     logger.error(f"LightGlue matcher failed: {e}")
-                    logger.error(f"Data shapes - kpts0: {data['keypoints0'].shape}, kpts1: {data['keypoints1'].shape}")
-                    logger.error(f"Data shapes - desc0: {data['descriptors0'].shape}, desc1: {data['descriptors1'].shape}")
+                    logger.error(f"Data shapes - kpts0: {data['image0']['keypoints'].shape}, kpts1: {data['image1']['keypoints'].shape}")
+                    logger.error(f"Data shapes - desc0: {data['image0']['descriptors'].shape}, desc1: {data['image1']['descriptors'].shape}")
                     raise e
             
             # Convert to numpy arrays - handle LightGlue output format

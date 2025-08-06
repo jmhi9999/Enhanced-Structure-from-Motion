@@ -61,8 +61,8 @@ class SuperPointExtractor(BaseFeatureExtractor):
             # SuperPoint configuration matching the provided format
             superpoint_conf = {
                 "nms_radius": self.config.get('nms_radius', 4),
-                "keypoint_threshold": self.config.get('keypoint_threshold', 0.005),
-                "max_keypoints": self.config.get('max_keypoints', -1),
+                "keypoint_threshold": self.config.get('keypoint_threshold', 0.003),  # Lower threshold for more keypoints
+                "max_keypoints": self.config.get('max_keypoints', 4096),  # Set reasonable max limit
                 "remove_borders": self.config.get('remove_borders', 4),
                 "fix_sampling": self.config.get('fix_sampling', False),
             }
@@ -122,8 +122,8 @@ class ALIKEDExtractor(BaseFeatureExtractor):
             # ALIKED configuration matching the provided format
             aliked_conf = {
                 "model_name": self.config.get('model_name', 'aliked-n16'),
-                "max_num_keypoints": self.config.get('max_num_keypoints', -1),
-                "detection_threshold": self.config.get('detection_threshold', 0.2),
+                "max_num_keypoints": self.config.get('max_num_keypoints', 4096),  # Set reasonable max limit
+                "detection_threshold": self.config.get('detection_threshold', 0.1),  # Lower threshold for more keypoints
                 "nms_radius": self.config.get('nms_radius', 2),
             }
             
@@ -263,7 +263,7 @@ class FeatureExtractor:
         self.config = config
         self.device = torch.device(config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
         self.extractor_type = config.get('feature_extractor', 'superpoint')
-        self.max_keypoints = config.get('max_keypoints', 2048)
+        self.max_keypoints = config.get('max_keypoints', 4096)
         self.max_image_size = config.get('max_image_size', 1600)
         
         # Create the actual extractor
