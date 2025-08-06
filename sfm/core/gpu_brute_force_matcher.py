@@ -348,11 +348,22 @@ class GPUBruteForceMatcher:
                 if 'matches' in pred and len(pred['matches']) > 0:
                     matches_tensor = pred['matches']
                     scores_tensor = pred.get('scores', None)
-                    # Convert to tensor if needed
-                    if isinstance(matches_tensor, list):
-                        matches_tensor = torch.tensor(matches_tensor, device=self.device)
-                    if scores_tensor is not None and isinstance(scores_tensor, list):
-                        scores_tensor = torch.tensor(scores_tensor, device=self.device)
+                    # Robust conversion to tensor if needed
+                    def robust_to_tensor(x):
+                        if isinstance(x, torch.Tensor):
+                            return x.to(self.device)
+                        if isinstance(x, np.ndarray):
+                            return torch.as_tensor(x, device=self.device)
+                        if isinstance(x, list):
+                            if len(x) > 0 and isinstance(x[0], (torch.Tensor, np.ndarray, list)):
+                                # List of tensors/arrays/lists
+                                return torch.stack([robust_to_tensor(xx) for xx in x])
+                            else:
+                                return torch.as_tensor(x, device=self.device)
+                        return torch.as_tensor(x, device=self.device)
+                    matches_tensor = robust_to_tensor(matches_tensor)
+                    if scores_tensor is not None:
+                        scores_tensor = robust_to_tensor(scores_tensor)
                     # Remove batch dimensions
                     while hasattr(matches_tensor, 'dim') and matches_tensor.dim() > 2:
                         matches_tensor = matches_tensor.squeeze(0)
