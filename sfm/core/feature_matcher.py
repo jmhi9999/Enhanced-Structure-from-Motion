@@ -323,7 +323,21 @@ class EnhancedLightGlueMatcher:
                 matches_tensor = pred['matches']  # [S, 2] where S is number of matches
                 scores_tensor = pred.get('scores', None)  # [S]
                 
-                # Debug tensor shapes
+                # Handle case where matches_tensor might be a list
+                if isinstance(matches_tensor, list):
+                    if len(matches_tensor) > 0:
+                        matches_tensor = torch.stack(matches_tensor) if isinstance(matches_tensor[0], torch.Tensor) else torch.tensor(matches_tensor)
+                    else:
+                        matches_tensor = torch.empty(0, 2)
+                
+                # Handle case where scores_tensor might be a list
+                if isinstance(scores_tensor, list):
+                    if len(scores_tensor) > 0:
+                        scores_tensor = torch.stack(scores_tensor) if isinstance(scores_tensor[0], torch.Tensor) else torch.tensor(scores_tensor)
+                    else:
+                        scores_tensor = torch.empty(0)
+                
+                # Debug tensor shapes (now safe to call .shape)
                 logger.debug(f"matches shape: {matches_tensor.shape}")
                 if scores_tensor is not None:
                     logger.debug(f"scores shape: {scores_tensor.shape}")
@@ -346,11 +360,21 @@ class EnhancedLightGlueMatcher:
                     scores = np.array([])
             else:
                 # Fallback for older LightGlue versions
-                matches0_indices = pred.get('matches0', torch.tensor([])).cpu().numpy()
-                matches1_indices = pred.get('matches1', torch.tensor([])).cpu().numpy()
-                scores = pred.get('mscores0', np.ones(len(matches0_indices)))
-                if isinstance(scores, torch.Tensor):
-                    scores = scores.cpu().numpy()
+                matches0_data = pred.get('matches0', torch.tensor([]))
+                matches1_data = pred.get('matches1', torch.tensor([]))
+                scores_data = pred.get('mscores0', None)
+                
+                # Handle lists in fallback case too
+                if isinstance(matches0_data, list):
+                    matches0_data = torch.tensor(matches0_data) if matches0_data else torch.tensor([])
+                if isinstance(matches1_data, list):
+                    matches1_data = torch.tensor(matches1_data) if matches1_data else torch.tensor([])
+                if isinstance(scores_data, list):
+                    scores_data = torch.tensor(scores_data) if scores_data else None
+                
+                matches0_indices = matches0_data.cpu().numpy()
+                matches1_indices = matches1_data.cpu().numpy()
+                scores = scores_data.cpu().numpy() if scores_data is not None else np.ones(len(matches0_indices))
             
             matches = {
                 'keypoints0': feat1['keypoints'],
