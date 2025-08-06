@@ -267,16 +267,26 @@ class EnhancedLightGlueMatcher:
             logger.debug(f"kpts0 shape: {kpts0.shape}, desc0 shape: {desc0.shape}")
             logger.debug(f"kpts1 shape: {kpts1.shape}, desc1 shape: {desc1.shape}")
             
-            # Ensure keypoints have correct shape: [N, 2]
+            # Ensure keypoints have correct shape: [1, N, 2] for LightGlue
             if kpts0.dim() == 1:
                 kpts0 = kpts0.unsqueeze(0)
+            if kpts0.dim() == 2:  # [N, 2] -> [1, N, 2]
+                kpts0 = kpts0.unsqueeze(0)
+                
             if kpts1.dim() == 1:
                 kpts1 = kpts1.unsqueeze(0)
+            if kpts1.dim() == 2:  # [N, 2] -> [1, N, 2]
+                kpts1 = kpts1.unsqueeze(0)
             
-            # Ensure descriptors have correct shape: [N, D] 
+            # Ensure descriptors have correct shape: [1, N, D] for LightGlue
             if desc0.dim() == 1:
                 desc0 = desc0.unsqueeze(0)
+            if desc0.dim() == 2:  # [N, D] -> [1, N, D]
+                desc0 = desc0.unsqueeze(0)
+                
             if desc1.dim() == 1:
+                desc1 = desc1.unsqueeze(0)
+            if desc1.dim() == 2:  # [N, D] -> [1, N, D]
                 desc1 = desc1.unsqueeze(0)
             
             # Final shape validation
@@ -303,48 +313,60 @@ class EnhancedLightGlueMatcher:
                     pred = self.matcher(data)
                 except Exception as e:
                     logger.error(f"LightGlue matcher failed: {e}")
-                    logger.error(f"Data shapes - kpts0: {data['keypoints0'].shape}, kpts1: {data['keypoints1'].shape}")
-                    logger.error(f"Data shapes - desc0: {data['descriptors0'].shape}, desc1: {data['descriptors1'].shape}")
+                    logger.error(f"Data shapes - kpts0: {data['image0']['keypoints'].shape}, kpts1: {data['image1']['keypoints'].shape}")
+                    logger.error(f"Data shapes - desc0: {data['image0']['descriptors'].shape}, desc1: {data['image1']['descriptors'].shape}")
                     raise e
             
-            # Convert to numpy arrays - handle tensor dimensions properly
-            matches0_tensor = pred['matches0']
-            matches1_tensor = pred['matches1']
-            
-            # Debug tensor shapes
-            logger.debug(f"matches0 shape: {matches0_tensor.shape}, matches1 shape: {matches1_tensor.shape}")
-            
-            # Handle different tensor shapes that LightGlue might return
-            # LightGlue returns matches as indices, typically shape [N] or [1, N]
-            if matches0_tensor.dim() > 1:
-                # Remove batch dimensions
-                while matches0_tensor.dim() > 1:
-                    matches0_tensor = matches0_tensor.squeeze(0)
-            if matches1_tensor.dim() > 1:
-                while matches1_tensor.dim() > 1:
-                    matches1_tensor = matches1_tensor.squeeze(0)
+            # Convert to numpy arrays - handle LightGlue output format
+            # LightGlue returns 'matches' (shape [S, 2]) and 'scores' (shape [S])
+            if 'matches' in pred:
+                matches_tensor = pred['matches']  # [S, 2] where S is number of matches
+                scores_tensor = pred.get('scores', None)  # [S]
+                
+                # Debug tensor shapes
+                logger.debug(f"matches shape: {matches_tensor.shape}")
+                if scores_tensor is not None:
+                    logger.debug(f"scores shape: {scores_tensor.shape}")
+                
+                # Remove batch dimensions if they exist
+                while matches_tensor.dim() > 2:
+                    matches_tensor = matches_tensor.squeeze(0)
+                if scores_tensor is not None:
+                    while scores_tensor.dim() > 1:
+                        scores_tensor = scores_tensor.squeeze(0)
+                
+                # Extract matches - LightGlue format is [match_idx0, match_idx1] pairs
+                if matches_tensor.shape[0] > 0:  # Check if we have matches
+                    matches0_indices = matches_tensor[:, 0].cpu().numpy()
+                    matches1_indices = matches_tensor[:, 1].cpu().numpy()
+                    scores = scores_tensor.cpu().numpy() if scores_tensor is not None else np.ones(len(matches0_indices))
+                else:
+                    matches0_indices = np.array([])
+                    matches1_indices = np.array([])
+                    scores = np.array([])
+            else:
+                # Fallback for older LightGlue versions
+                matches0_indices = pred.get('matches0', torch.tensor([])).cpu().numpy()
+                matches1_indices = pred.get('matches1', torch.tensor([])).cpu().numpy()
+                scores = pred.get('mscores0', np.ones(len(matches0_indices)))
+                if isinstance(scores, torch.Tensor):
+                    scores = scores.cpu().numpy()
             
             matches = {
                 'keypoints0': feat1['keypoints'],
                 'keypoints1': feat2['keypoints'],
-                'matches0': matches0_tensor.cpu().numpy(),
-                'matches1': matches1_tensor.cpu().numpy(),
-                'mscores0': pred['mscores0'].cpu().numpy() if 'mscores0' in pred else None,
-                'mscores1': pred['mscores1'].cpu().numpy() if 'mscores1' in pred else None,
+                'matches0': matches0_indices,
+                'matches1': matches1_indices,
+                'mscores0': scores,
+                'mscores1': scores,  # Same scores for both
                 'image_shape0': feat1['image_shape'],
                 'image_shape1': feat2['image_shape']
             }
             
-            # Handle score tensors if they exist
-            if matches['mscores0'] is not None and matches['mscores0'].ndim > 1:
-                matches['mscores0'] = matches['mscores0'].flatten()
-            if matches['mscores1'] is not None and matches['mscores1'].ndim > 1:
-                matches['mscores1'] = matches['mscores1'].flatten()
-            
             # Filter matches based on confidence
-            if matches['mscores0'] is not None:
+            if len(scores) > 0:
                 confidence_threshold = 0.2
-                confident_matches = matches['mscores0'] > confidence_threshold
+                confident_matches = scores > confidence_threshold
                 
                 matches['matches0'] = matches['matches0'][confident_matches]
                 matches['matches1'] = matches['matches1'][confident_matches]
