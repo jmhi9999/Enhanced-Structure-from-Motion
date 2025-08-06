@@ -314,18 +314,22 @@ class GPUBruteForceMatcher:
         """
         Match a batch of image pairs using GPU tensors
         """
+        import traceback
         batch_matches = {}
-        
+        # Optional GPU profiling
+        enable_profiling = getattr(self, 'enable_profiling', False)
+        if enable_profiling and torch.cuda.is_available():
+            batch_start_event = torch.cuda.Event(enable_timing=True)
+            batch_end_event = torch.cuda.Event(enable_timing=True)
+            batch_start_event.record()
         for img1_idx, img2_idx in batch_pairs:
             try:
                 # Get feature tensors (already on GPU)
                 kpts1, desc1, scores1 = self.feature_storage.get_features_tensor(img1_idx)
                 kpts2, desc2, scores2 = self.feature_storage.get_features_tensor(img2_idx)
-                
                 # Skip if no features
                 if len(kpts1) == 0 or len(kpts2) == 0:
                     continue
-                
                 # Prepare data for LightGlue (tensors already on GPU)
                 data = {
                     "image0": {
@@ -337,11 +341,9 @@ class GPUBruteForceMatcher:
                         "descriptors": desc2.unsqueeze(0),  # [1, N, D]
                     }
                 }
-                
                 # Match features using LightGlue
                 with torch.no_grad():
                     pred = self.matcher(data)
-                
                 # Process matches
                 if 'matches' in pred and len(pred['matches']) > 0:
                     matches_tensor = pred['matches']
@@ -381,13 +383,16 @@ class GPUBruteForceMatcher:
                                 'image_shape0': self.feature_storage.image_shapes[img1_idx],
                                 'image_shape1': self.feature_storage.image_shapes[img2_idx]
                             }
-                
             except Exception as e:
                 img1_name = self.feature_storage.image_names[img1_idx]
                 img2_name = self.feature_storage.image_names[img2_idx]
-                logger.warning(f"Failed to match {img1_name} and {img2_name}: {e}")
+                logger.warning(f"Failed to match {img1_name} and {img2_name}: {e}\n{traceback.format_exc()}")
                 continue
-        
+        if enable_profiling and torch.cuda.is_available():
+            batch_end_event.record()
+            torch.cuda.synchronize()
+            elapsed_ms = batch_start_event.elapsed_time(batch_end_event)
+            logger.info(f"[Profiling] Batch of {len(batch_pairs)} pairs matched in {elapsed_ms:.2f} ms on GPU.")
         return batch_matches
     
     def match_specific_pairs(self, pairs: List[Tuple[str, str]]) -> Dict[Tuple[str, str], Any]:
