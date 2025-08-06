@@ -283,15 +283,18 @@ class EnhancedLightGlueMatcher:
             logger.debug(f"Final kpts0 shape: {kpts0.shape}, desc0 shape: {desc0.shape}")
             logger.debug(f"Final kpts1 shape: {kpts1.shape}, desc1 shape: {desc1.shape}")
             
+            # LightGlue expects the data in this specific format
             data = {
-                'keypoints0': kpts0,
-                'keypoints1': kpts1,
-                'descriptors0': desc0,
-                'descriptors1': desc1,
-                'image_size0': torch.tensor([w0, h0]).float().to(self.device),
-                'image_size1': torch.tensor([w1, h1]).float().to(self.device),
-                'image0': torch.zeros(1, 1, h0, w0).to(self.device),  # Dummy image tensor
-                'image1': torch.zeros(1, 1, h1, w1).to(self.device)   # Dummy image tensor
+                "image0": {
+                    "keypoints": kpts0,
+                    "descriptors": desc0,
+                    "image_size": torch.tensor([w0, h0]).float().to(self.device),
+                },
+                "image1": {
+                    "keypoints": kpts1, 
+                    "descriptors": desc1,
+                    "image_size": torch.tensor([w1, h1]).float().to(self.device),
+                }
             }
             
             # Match features
