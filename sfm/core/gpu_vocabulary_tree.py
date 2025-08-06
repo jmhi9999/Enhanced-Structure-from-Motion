@@ -254,18 +254,24 @@ class GPUVocabularyTree:
         logger.info(f"Built vocabulary with {len(vocabulary['nodes'])} nodes")
         return vocabulary
     
-    def _gpu_kmeans(self, descriptors: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
+    def _gpu_kmeans(self, descriptors: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray, int]:
         """GPU-accelerated k-means clustering using FAISS"""
         try:
-            # Adjust k if not enough descriptors
-            min_points_per_cluster = 39  # FAISS recommendation
+            # Adjust k if not enough descriptors - FAISS needs at least 39 points per cluster
+            min_points_per_cluster = 39  # FAISS recommendation  
             required_points = k * min_points_per_cluster
             
             if len(descriptors) < required_points:
-                # Reduce k to have at least 39 points per cluster
-                k = max(2, len(descriptors) // min_points_per_cluster)
-                if k < 2:
-                    k = 2  # Minimum clusters
+                # Calculate optimal k based on available points
+                optimal_k = max(1, len(descriptors) // min_points_per_cluster)
+                if optimal_k < k:
+                    k = optimal_k
+                
+                # If still not enough points, fall back to CPU k-means
+                if len(descriptors) < min_points_per_cluster:
+                    logger.warning(f"Not enough points ({len(descriptors)}) for GPU clustering, using CPU fallback")
+                    centers, assignments = self._cpu_kmeans_fallback(descriptors, min(k, len(descriptors)))
+                    return centers, assignments, len(centers)
             
             # Use FAISS GPU k-means for speed
             d = descriptors.shape[1]
@@ -289,13 +295,25 @@ class GPUVocabularyTree:
     
     def _cpu_kmeans_fallback(self, descriptors: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
         """CPU fallback for k-means clustering"""
-        from sklearn.cluster import KMeans
-        
-        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-        assignments = kmeans.fit_predict(descriptors)
-        centers = kmeans.cluster_centers_
-        
-        return centers, assignments
+        try:
+            from sklearn.cluster import KMeans
+            
+            # Ensure k doesn't exceed number of points
+            k = min(k, len(descriptors))
+            if k < 1:
+                k = 1
+                
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+            assignments = kmeans.fit_predict(descriptors)
+            centers = kmeans.cluster_centers_
+            
+            return centers, assignments
+        except Exception as e:
+            logger.warning(f"CPU k-means failed: {e}, using simple centroid")
+            # Fallback to simple centroid
+            center = np.mean(descriptors, axis=0, keepdims=True)
+            assignments = np.zeros(len(descriptors), dtype=int)
+            return center, assignments
     
     def _build_inverted_index(self, all_features: Dict[str, Any]):
         """Build inverted index for fast image retrieval"""

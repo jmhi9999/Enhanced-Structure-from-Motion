@@ -233,16 +233,39 @@ class EnhancedLightGlueMatcher:
     def _match_pair(self, feat1: Dict, feat2: Dict) -> Optional[Dict]:
         """Match features between a single pair of images"""
         try:
+            # Validate feature data
+            required_keys = ['keypoints', 'descriptors', 'image_shape']
+            for key in required_keys:
+                if key not in feat1:
+                    logger.error(f"Missing key '{key}' in feat1")
+                    return None
+                if key not in feat2:
+                    logger.error(f"Missing key '{key}' in feat2")
+                    return None
+            
             # Prepare data for LightGlue
             # Create dummy image tensors (LightGlue might need them for some operations)
             h0, w0 = feat1['image_shape']
             h1, w1 = feat2['image_shape']
             
+            # Validate feature shapes
+            if len(feat1['keypoints']) == 0 or len(feat2['keypoints']) == 0:
+                logger.debug("One of the feature sets is empty")
+                return None
+            
             # Convert features to tensors and ensure proper dimensions
+            # Debug shapes before conversion
+            logger.debug(f"feat1 keypoints shape: {feat1['keypoints'].shape}, descriptors shape: {feat1['descriptors'].shape}")
+            logger.debug(f"feat2 keypoints shape: {feat2['keypoints'].shape}, descriptors shape: {feat2['descriptors'].shape}")
+            
             kpts0 = torch.from_numpy(feat1['keypoints']).float().to(self.device)
             kpts1 = torch.from_numpy(feat2['keypoints']).float().to(self.device)
             desc0 = torch.from_numpy(feat1['descriptors']).float().to(self.device)
             desc1 = torch.from_numpy(feat2['descriptors']).float().to(self.device)
+            
+            # Debug tensor shapes after conversion
+            logger.debug(f"kpts0 shape: {kpts0.shape}, desc0 shape: {desc0.shape}")
+            logger.debug(f"kpts1 shape: {kpts1.shape}, desc1 shape: {desc1.shape}")
             
             # Ensure keypoints have correct shape: [N, 2]
             if kpts0.dim() == 1:
@@ -255,6 +278,10 @@ class EnhancedLightGlueMatcher:
                 desc0 = desc0.unsqueeze(0)
             if desc1.dim() == 1:
                 desc1 = desc1.unsqueeze(0)
+            
+            # Final shape validation
+            logger.debug(f"Final kpts0 shape: {kpts0.shape}, desc0 shape: {desc0.shape}")
+            logger.debug(f"Final kpts1 shape: {kpts1.shape}, desc1 shape: {desc1.shape}")
             
             data = {
                 'keypoints0': kpts0,
@@ -269,17 +296,30 @@ class EnhancedLightGlueMatcher:
             
             # Match features
             with torch.no_grad():
-                pred = self.matcher(data)
+                try:
+                    pred = self.matcher(data)
+                except Exception as e:
+                    logger.error(f"LightGlue matcher failed: {e}")
+                    logger.error(f"Data shapes - kpts0: {data['keypoints0'].shape}, kpts1: {data['keypoints1'].shape}")
+                    logger.error(f"Data shapes - desc0: {data['descriptors0'].shape}, desc1: {data['descriptors1'].shape}")
+                    raise e
             
             # Convert to numpy arrays - handle tensor dimensions properly
             matches0_tensor = pred['matches0']
             matches1_tensor = pred['matches1']
             
-            # Flatten if needed (remove batch dimension if present)
+            # Debug tensor shapes
+            logger.debug(f"matches0 shape: {matches0_tensor.shape}, matches1 shape: {matches1_tensor.shape}")
+            
+            # Handle different tensor shapes that LightGlue might return
+            # LightGlue returns matches as indices, typically shape [N] or [1, N]
             if matches0_tensor.dim() > 1:
-                matches0_tensor = matches0_tensor.flatten()
+                # Remove batch dimensions
+                while matches0_tensor.dim() > 1:
+                    matches0_tensor = matches0_tensor.squeeze(0)
             if matches1_tensor.dim() > 1:
-                matches1_tensor = matches1_tensor.flatten()
+                while matches1_tensor.dim() > 1:
+                    matches1_tensor = matches1_tensor.squeeze(0)
             
             matches = {
                 'keypoints0': feat1['keypoints'],
@@ -315,6 +355,11 @@ class EnhancedLightGlueMatcher:
                 return None
                 
         except Exception as e:
+            # More detailed error logging
+            import traceback
+            error_details = f"Error in feature matching: {e}\n"
+            error_details += f"Traceback: {traceback.format_exc()}"
+            logger.error(error_details)
             print(f"Error in feature matching: {e}")
             return None
     
