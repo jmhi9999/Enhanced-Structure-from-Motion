@@ -189,4 +189,28 @@ def apply_histogram_equalization(image: np.ndarray) -> np.ndarray:
         # Grayscale image
         image_eq = cv2.equalizeHist(image)
     
-    return image_eq 
+    return image_eq
+
+
+def resize_image(image_path: str, max_size: int = 1600) -> np.ndarray:
+    """Resize a single image to maximum size while maintaining aspect ratio"""
+    try:
+        # Load image
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"Could not load image {image_path}")
+        
+        # Get original dimensions
+        height, width = image.shape[:2]
+        
+        # Resize if necessary
+        if max(width, height) > max_size:
+            scale = max_size / max(width, height)
+            new_width = int(width * scale)
+            new_height = int(height * scale)
+            image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_LANCZOS4)
+        
+        return image
+        
+    except Exception as e:
+        raise ValueError(f"Error processing image {image_path}: {e}") 
