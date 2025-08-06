@@ -68,7 +68,12 @@ class GeometricVerification:
         if isinstance(config_or_method, dict):
             config = config_or_method
             method_str = config.get('geometric_method', 'opencv_magsac')
-            self.method = RANSACMethod(method_str) if method_str in [m.value for m in RANSACMethod] else RANSACMethod.OPENCV_MAGSAC
+            # Safely get the enum value
+            try:
+                self.method = RANSACMethod(method_str)
+            except ValueError:
+                # If method_str is not a valid enum value, use default
+                self.method = RANSACMethod.OPENCV_MAGSAC
             self.confidence = config.get('confidence', 0.999)
             self.max_iterations = config.get('max_iterations', 10000)
             self.threshold = config.get('threshold', 1.0)
