@@ -26,6 +26,13 @@ except ImportError:
     GPU_VOCAB_AVAILABLE = False
     GPUVocabularyTree = None
 
+try:
+    from .gpu_brute_force_matcher import GPUBruteForceMatcher
+    GPU_BRUTE_FORCE_AVAILABLE = True
+except ImportError:
+    GPU_BRUTE_FORCE_AVAILABLE = False
+    GPUBruteForceMatcher = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,23 +41,32 @@ class EnhancedLightGlueMatcher:
     Enhanced LightGlue feature matcher with GPU acceleration
     
     Key improvements over hloc:
-    1. O(n log n) complexity using vocabulary tree vs O(n²) brute force
-    2. Parallel feature matching with threading
-    3. GPU-accelerated similarity search
-    4. Intelligent pair selection
-    5. Memory-efficient batch processing
+    1. GPU tensor-based brute force matching for maximum performance
+    2. Features kept in GPU memory as tensors (no file I/O)
+    3. GPU-accelerated direct comparisons
+    4. Memory-efficient batch processing
+    5. Option to use vocabulary tree for large datasets
     """
     
-    def __init__(self, device: torch.device, use_vocabulary_tree: bool = True, feature_type: str = 'superpoint', config: Dict[str, Any] = None):
+    def __init__(self, device: torch.device, use_brute_force: bool = True, use_vocabulary_tree: bool = False, feature_type: str = 'superpoint', config: Dict[str, Any] = None):
         self.device = device
         self.matcher = None
+        self.use_brute_force = use_brute_force
         self.use_vocabulary_tree = use_vocabulary_tree
         self.feature_type = feature_type
         self.config = config or {}
         
-        # Initialize vocabulary tree for efficient pair selection
-        if self.use_vocabulary_tree:
+        # Initialize GPU brute force matcher (preferred method)
+        if self.use_brute_force and GPU_BRUTE_FORCE_AVAILABLE:
+            self.gpu_brute_force_matcher = GPUBruteForceMatcher(device, feature_type, config)
+            logger.info("Using GPU brute force matcher")
+        else:
+            self.gpu_brute_force_matcher = None
+        
+        # Initialize vocabulary tree as fallback for very large datasets
+        if self.use_vocabulary_tree and GPU_VOCAB_AVAILABLE:
             self.vocabulary_tree = GPUVocabularyTree(device, config)
+            logger.info("Using vocabulary tree matcher")
         else:
             self.vocabulary_tree = None
         
@@ -98,56 +114,59 @@ class EnhancedLightGlueMatcher:
     
     def match_features(self, features: Dict[str, Any]) -> Dict[Tuple[str, str], Any]:
         """
-        Enhanced feature matching with intelligent pair selection
-        Much faster than hloc's O(n²) brute force approach
+        Enhanced feature matching using GPU tensor operations
+        Maximum performance with features kept in GPU memory
         """
         start_time = time.time()
         
         image_paths = list(features.keys())
         matches = {}
         
-        logger.info(f"Enhanced feature matching for {len(image_paths)} images...")
+        logger.info(f"GPU tensor-based feature matching for {len(image_paths)} images...")
         
-        # Step 1: Intelligent pair selection using vocabulary tree
-        pair_selection_start = time.time()
-        
-        if self.use_vocabulary_tree and len(image_paths) > 10:
-            # O(n log n) complexity using vocabulary tree
-            logger.info("Using vocabulary tree for efficient pair selection...")
+        # Use GPU brute force matcher (preferred method)
+        if self.gpu_brute_force_matcher is not None:
+            logger.info("Using GPU brute force matcher with tensor operations...")
+            
+            # Load features to GPU memory as tensors
+            self.gpu_brute_force_matcher.load_features(features)
+            
+            # Perform GPU brute force matching
+            max_total_pairs = self.config.get('max_total_pairs', None)
+            matches = self.gpu_brute_force_matcher.match_all_pairs(max_pairs=max_total_pairs)
+            
+        # Fallback to vocabulary tree for very large datasets
+        elif self.vocabulary_tree is not None and len(image_paths) > 50:
+            logger.info("Using vocabulary tree for large dataset...")
+            
+            # Get smart pairs using vocabulary tree
             pairs = self.vocabulary_tree.get_image_pairs_for_matching(
                 features, self.max_pairs_per_image
             )
-            logger.info(f"Selected {len(pairs)} pairs (vs {len(image_paths)*(len(image_paths)-1)//2} brute force)")
+            logger.info(f"Selected {len(pairs)} pairs using vocabulary tree")
+            
+            # Match selected pairs
+            matches = self._match_pairs_sequential(features, pairs)
+            
         else:
-            # Fallback to all pairs for small datasets
+            # Traditional brute force with all pairs (fallback)
+            logger.info("Using traditional brute force matching...")
             pairs = []
             for i in range(len(image_paths)):
                 for j in range(i + 1, len(image_paths)):
                     pairs.append((image_paths[i], image_paths[j]))
-            logger.info(f"Using brute force for {len(pairs)} pairs")
-        
-        pair_selection_time = time.time() - pair_selection_start
-        self.timing_stats['pair_selection'].append(pair_selection_time)
-        
-        # Step 2: Parallel feature matching
-        matching_start = time.time()
-        
-        if len(pairs) > self.parallel_workers:
-            # Use parallel processing for large number of pairs
-            matches = self._match_pairs_parallel(features, pairs)
-        else:
-            # Sequential matching for small datasets
-            matches = self._match_pairs_sequential(features, pairs)
-        
-        matching_time = time.time() - matching_start
-        self.timing_stats['feature_matching'].append(matching_time)
+            
+            # Match all pairs
+            if len(pairs) > self.parallel_workers:
+                matches = self._match_pairs_parallel(features, pairs)
+            else:
+                matches = self._match_pairs_sequential(features, pairs)
         
         total_time = time.time() - start_time
         self.timing_stats['total'].append(total_time)
         
-        logger.info(f"Feature matching completed in {total_time:.2f}s "
-                   f"(pair selection: {pair_selection_time:.2f}s, matching: {matching_time:.2f}s)")
-        logger.info(f"Successfully matched {len(matches)}/{len(pairs)} pairs")
+        logger.info(f"Feature matching completed in {total_time:.2f}s")
+        logger.info(f"Successfully matched {len(matches)} pairs")
         
         return matches
     
@@ -450,13 +469,15 @@ class FeatureMatcher:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.device = torch.device(config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
-        self.use_vocabulary_tree = config.get('use_vocabulary_tree', True)
+        self.use_brute_force = config.get('use_brute_force', True)
+        self.use_vocabulary_tree = config.get('use_vocabulary_tree', False)  # Disabled by default, GPU brute force is preferred
         self.max_pairs_per_image = config.get('max_pairs_per_image', 20)
         
-        # Create the actual matcher
+        # Create the actual matcher with GPU brute force as default
         feature_type = config.get('feature_type', 'superpoint')
         self.matcher = EnhancedLightGlueMatcher(
             device=self.device,
+            use_brute_force=self.use_brute_force,
             use_vocabulary_tree=self.use_vocabulary_tree,
             feature_type=feature_type,
             config=config

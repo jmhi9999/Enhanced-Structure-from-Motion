@@ -49,10 +49,14 @@ def parse_args():
                        help="Maximum number of keypoints per image")
     
     # Matching and verification
+    parser.add_argument("--use_brute_force", action="store_true", default=True,
+                       help="Use GPU brute force matching (default and recommended)")
     parser.add_argument("--use_vocab_tree", action="store_true",
-                       help="Use vocabulary tree for smart pair selection")
+                       help="Use vocabulary tree for smart pair selection (for very large datasets)")
     parser.add_argument("--max_pairs_per_image", type=int, default=20,
                        help="Maximum pairs per image for vocabulary tree")
+    parser.add_argument("--max_total_pairs", type=int, default=None,
+                       help="Maximum total pairs for brute force matching")
     
     # Bundle adjustment
     parser.add_argument("--use_gpu_ba", action="store_true",
@@ -137,8 +141,10 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'feature_extractor': args.feature_extractor,
             'max_keypoints': args.max_keypoints,
             'max_image_size': args.max_image_size,
+            'use_brute_force': args.use_brute_force,
             'use_vocab_tree': args.use_vocab_tree,
             'max_pairs_per_image': args.max_pairs_per_image,
+            'max_total_pairs': args.max_total_pairs,
             'use_gpu_ba': args.use_gpu_ba,
             'ba_max_iterations': args.ba_max_iterations,
             'use_monocular_depth': args.use_monocular_depth,
@@ -164,10 +170,11 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info("=" * 60)
     logger.info("Enhanced SfM Pipeline for 3D Gaussian Splatting")
     logger.info("=" * 60)
-    logger.info(f"Input directory: {args.input_dir}")
-    logger.info(f"Output directory: {args.output_dir}")
-    logger.info(f"Feature extractor: {args.feature_extractor}")
-    logger.info(f"High quality mode: {args.high_quality}")
+    logger.info(f"Input directory: {input_dir}")
+    logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Feature extractor: {kwargs.get('feature_extractor', 'superpoint')}")
+    logger.info(f"GPU brute force matching: {kwargs.get('use_brute_force', True)}")
+    logger.info(f"High quality mode: {kwargs.get('high_quality', False)}")
     
     # Performance tracking
     start_time = time.time()
