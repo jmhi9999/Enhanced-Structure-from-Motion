@@ -346,31 +346,31 @@ class GPUBruteForceMatcher:
                 if 'matches' in pred and len(pred['matches']) > 0:
                     matches_tensor = pred['matches']
                     scores_tensor = pred.get('scores', None)
-                    
+                    # Convert to tensor if needed
+                    if isinstance(matches_tensor, list):
+                        matches_tensor = torch.tensor(matches_tensor, device=self.device)
+                    if scores_tensor is not None and isinstance(scores_tensor, list):
+                        scores_tensor = torch.tensor(scores_tensor, device=self.device)
                     # Remove batch dimensions
-                    while matches_tensor.dim > 2:
+                    while hasattr(matches_tensor, 'dim') and matches_tensor.dim() > 2:
                         matches_tensor = matches_tensor.squeeze(0)
                     if scores_tensor is not None:
-                        while scores_tensor.dim > 1:
+                        while hasattr(scores_tensor, 'dim') and scores_tensor.dim() > 1:
                             scores_tensor = scores_tensor.squeeze(0)
-                    
                     if matches_tensor.shape[0] > 0:
                         matches0_indices = matches_tensor[:, 0].cpu().numpy()
                         matches1_indices = matches_tensor[:, 1].cpu().numpy()
                         match_scores = scores_tensor.cpu().numpy() if scores_tensor is not None else np.ones(len(matches0_indices))
-                        
                         # Filter by confidence
                         if len(match_scores) > 0:
                             confident_matches = match_scores > self.confidence_threshold
                             matches0_indices = matches0_indices[confident_matches]
                             matches1_indices = matches1_indices[confident_matches]
                             match_scores = match_scores[confident_matches]
-                        
                         # Only keep if enough matches
                         if len(matches0_indices) >= self.min_matches:
                             img1_name = self.feature_storage.image_names[img1_idx]
                             img2_name = self.feature_storage.image_names[img2_idx]
-                            
                             batch_matches[(img1_name, img2_name)] = {
                                 'keypoints0': kpts1.cpu().numpy(),
                                 'keypoints1': kpts2.cpu().numpy(),
