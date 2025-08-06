@@ -41,10 +41,11 @@ class EnhancedLightGlueMatcher:
     5. Memory-efficient batch processing
     """
     
-    def __init__(self, device: torch.device, use_vocabulary_tree: bool = True):
+    def __init__(self, device: torch.device, use_vocabulary_tree: bool = True, feature_type: str = 'superpoint'):
         self.device = device
         self.matcher = None
         self.use_vocabulary_tree = use_vocabulary_tree
+        self.feature_type = feature_type
         
         # Initialize vocabulary tree for efficient pair selection
         if self.use_vocabulary_tree:
@@ -70,7 +71,7 @@ class EnhancedLightGlueMatcher:
         """Setup LightGlue matcher"""
         try:
             # LightGlue supports multiple extractors dynamically
-            self.matcher = LightGlue(features='superpoint').eval().to(self.device)
+            self.matcher = LightGlue(features=self.feature_type).eval().to(self.device)
         except NameError:
             # Fallback implementation
             self.matcher = self._create_fallback_matcher()
@@ -328,9 +329,11 @@ class FeatureMatcher:
         self.max_pairs_per_image = config.get('max_pairs_per_image', 20)
         
         # Create the actual matcher
+        feature_type = config.get('feature_type', 'superpoint')
         self.matcher = EnhancedLightGlueMatcher(
             device=self.device,
-            use_vocabulary_tree=self.use_vocabulary_tree
+            use_vocabulary_tree=self.use_vocabulary_tree,
+            feature_type=feature_type
         )
     
     def match(self, features: Dict[str, Any]) -> Dict[Tuple[str, str], Any]:

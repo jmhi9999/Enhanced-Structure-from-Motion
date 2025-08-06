@@ -76,7 +76,9 @@ class SuperPointExtractor(BaseFeatureExtractor):
                 
                 # Extract features
                 with torch.no_grad():
-                    pred = self.model(image_tensor)
+                    # SuperPoint expects a dictionary with 'image' key
+                    input_data = {'image': image_tensor}
+                    pred = self.model(input_data)
                 
                 # Convert to numpy arrays
                 keypoints = pred['keypoints'][0].cpu().numpy()
@@ -120,7 +122,9 @@ class ALIKEDExtractor(BaseFeatureExtractor):
                 
                 # Extract features
                 with torch.no_grad():
-                    pred = self.model(image_tensor)
+                    # ALIKED expects a dictionary with 'image' key
+                    input_data = {'image': image_tensor}
+                    pred = self.model(input_data)
                 
                 # Convert to numpy arrays
                 keypoints = pred['keypoints'][0].cpu().numpy()
@@ -164,7 +168,9 @@ class DISKExtractor(BaseFeatureExtractor):
                 
                 # Extract features
                 with torch.no_grad():
-                    pred = self.model(image_tensor)
+                    # DISK expects a dictionary with 'image' key
+                    input_data = {'image': image_tensor}
+                    pred = self.model(input_data)
                 
                 # Convert to numpy arrays
                 keypoints = pred['keypoints'][0].cpu().numpy()
