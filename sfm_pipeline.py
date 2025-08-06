@@ -446,8 +446,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     
     reconstruction = IncrementalSfM(
         device=device,
-        max_image_size=kwargs.get('max_image_size', 1600),
-        high_quality=kwargs.get('high_quality', True)
+        max_image_size=kwargs.get('max_image_size', 1600)
     )
     
     sparse_points, cameras, images = reconstruction.reconstruct(
