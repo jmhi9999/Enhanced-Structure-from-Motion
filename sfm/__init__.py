@@ -5,34 +5,22 @@ GPU-accelerated SfM pipeline with modern feature extractors and matchers
 
 __version__ = "0.1.0"
 
-# Import main pipeline function (lazy import to avoid heavy dependencies on init)
-def _get_sfm_pipeline():
-    """Lazy import of sfm_pipeline to avoid heavy dependencies"""
-    import sys
-    from pathlib import Path
-    
-    # Add parent directory to path to import sfm_pipeline
-    _parent_dir = str(Path(__file__).parent.parent)
-    if _parent_dir not in sys.path:
-        sys.path.insert(0, _parent_dir)
-    
-    from sfm_pipeline import sfm_pipeline
-    return sfm_pipeline
+# Import and expose the main pipeline function
+import sys
+from pathlib import Path
 
-# Make sfm_pipeline available as a module attribute
-sfm_pipeline = None  # Will be loaded on first access
+# Add parent directory to path to import sfm_pipeline
+_parent_dir = str(Path(__file__).parent.parent)
+if _parent_dir not in sys.path:
+    sys.path.insert(0, _parent_dir)
+
+from sfm_pipeline import sfm_pipeline
 
 # Lazy imports for heavy dependencies - only import when actually used
 def __getattr__(name):
     """Lazy import for module attributes"""
-    global sfm_pipeline
     
-    if name == "sfm_pipeline":
-        if sfm_pipeline is None:
-            sfm_pipeline = _get_sfm_pipeline()
-        return sfm_pipeline
-    
-    # For other heavy components, import only when needed
+    # For heavy components, import only when needed
     if name == "FeatureExtractorFactory":
         from .core.feature_extractor import FeatureExtractorFactory
         return FeatureExtractorFactory

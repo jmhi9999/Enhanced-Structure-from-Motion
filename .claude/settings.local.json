@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(find:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(PYTHONPATH=/mnt/d/Github/Enhanced-Structure-from-Motion python /mnt/d/Github/gaussian-splatting/test_enhanced_sfm.py)"
     ],
     "deny": []
   }
