@@ -230,13 +230,22 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         feature_extractor = FeatureExtractorFactory.create(
             kwargs.get('feature_extractor', 'superpoint'),
             device=device,
-            max_keypoints=kwargs.get('max_keypoints', 2048),
-            high_quality=kwargs.get('high_quality', True)
+            config={
+                'max_keypoints': kwargs.get('max_keypoints', 4096),
+                'high_quality': kwargs.get('high_quality', True)
+            }
         )
         
+        # Prepare images in the format expected by extractors
+        images_for_extraction = []
+        for img_path, img_array in processed_images.items():
+            images_for_extraction.append({
+                'image': img_array,
+                'path': img_path
+            })
+        
         features = feature_extractor.extract_features(
-            list(processed_images.keys()),
-            num_workers=kwargs.get('num_workers', 4),
+            images_for_extraction,
             batch_size=kwargs.get('batch_size', 8)
         )
         
