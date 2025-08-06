@@ -271,7 +271,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info("Stage 3: Smart pair selection...")
     stage_start = time.time()
     
-    if kwargs.get('use_vocab_tree', True):
+    if kwargs.get('use_vocab_tree', False):
         # Use vocabulary tree for O(n log n) complexity
         vocab_tree = GPUVocabularyTree(
             device=device,
