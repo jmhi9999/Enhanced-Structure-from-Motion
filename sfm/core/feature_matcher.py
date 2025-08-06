@@ -92,8 +92,8 @@ class EnhancedLightGlueMatcher:
                 self.matcher.compile()
                 
         except NameError:
-            # Fallback implementation
-            self.matcher = self._create_fallback_matcher()
+            logger.error("LightGlue is not available. Please install it to use this matcher.")
+            raise ImportError("LightGlue is not available. Please install it to use this matcher.")
     
     
     def match_features(self, features: Dict[str, Any]) -> Dict[Tuple[str, str], Any]:
@@ -179,6 +179,7 @@ class EnhancedLightGlueMatcher:
                         pair_matches = future.result()
                         if pair_matches is not None:
                             matches[(img1, img2)] = pair_matches
+                            logger.debug(f"Matched {img1} and {img2} successfully with {len(pair_matches['matches0'])} matches")
                     except Exception as e:
                         logger.warning(f"Failed to match {img1} and {img2}: {e}")
         
