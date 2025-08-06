@@ -238,11 +238,29 @@ class EnhancedLightGlueMatcher:
             h0, w0 = feat1['image_shape']
             h1, w1 = feat2['image_shape']
             
+            # Convert features to tensors and ensure proper dimensions
+            kpts0 = torch.from_numpy(feat1['keypoints']).float().to(self.device)
+            kpts1 = torch.from_numpy(feat2['keypoints']).float().to(self.device)
+            desc0 = torch.from_numpy(feat1['descriptors']).float().to(self.device)
+            desc1 = torch.from_numpy(feat2['descriptors']).float().to(self.device)
+            
+            # Ensure keypoints have correct shape: [N, 2]
+            if kpts0.dim() == 1:
+                kpts0 = kpts0.unsqueeze(0)
+            if kpts1.dim() == 1:
+                kpts1 = kpts1.unsqueeze(0)
+            
+            # Ensure descriptors have correct shape: [N, D] 
+            if desc0.dim() == 1:
+                desc0 = desc0.unsqueeze(0)
+            if desc1.dim() == 1:
+                desc1 = desc1.unsqueeze(0)
+            
             data = {
-                'keypoints0': torch.from_numpy(feat1['keypoints']).float().to(self.device),
-                'keypoints1': torch.from_numpy(feat2['keypoints']).float().to(self.device),
-                'descriptors0': torch.from_numpy(feat1['descriptors']).float().to(self.device),
-                'descriptors1': torch.from_numpy(feat2['descriptors']).float().to(self.device),
+                'keypoints0': kpts0,
+                'keypoints1': kpts1,
+                'descriptors0': desc0,
+                'descriptors1': desc1,
                 'image_size0': torch.tensor([w0, h0]).float().to(self.device),
                 'image_size1': torch.tensor([w1, h1]).float().to(self.device),
                 'image0': torch.zeros(1, 1, h0, w0).to(self.device),  # Dummy image tensor
@@ -253,17 +271,32 @@ class EnhancedLightGlueMatcher:
             with torch.no_grad():
                 pred = self.matcher(data)
             
-            # Convert to numpy arrays
+            # Convert to numpy arrays - handle tensor dimensions properly
+            matches0_tensor = pred['matches0']
+            matches1_tensor = pred['matches1']
+            
+            # Flatten if needed (remove batch dimension if present)
+            if matches0_tensor.dim() > 1:
+                matches0_tensor = matches0_tensor.flatten()
+            if matches1_tensor.dim() > 1:
+                matches1_tensor = matches1_tensor.flatten()
+            
             matches = {
                 'keypoints0': feat1['keypoints'],
                 'keypoints1': feat2['keypoints'],
-                'matches0': pred['matches0'].cpu().numpy(),
-                'matches1': pred['matches1'].cpu().numpy(),
+                'matches0': matches0_tensor.cpu().numpy(),
+                'matches1': matches1_tensor.cpu().numpy(),
                 'mscores0': pred['mscores0'].cpu().numpy() if 'mscores0' in pred else None,
                 'mscores1': pred['mscores1'].cpu().numpy() if 'mscores1' in pred else None,
                 'image_shape0': feat1['image_shape'],
                 'image_shape1': feat2['image_shape']
             }
+            
+            # Handle score tensors if they exist
+            if matches['mscores0'] is not None and matches['mscores0'].ndim > 1:
+                matches['mscores0'] = matches['mscores0'].flatten()
+            if matches['mscores1'] is not None and matches['mscores1'].ndim > 1:
+                matches['mscores1'] = matches['mscores1'].flatten()
             
             # Filter matches based on confidence
             if matches['mscores0'] is not None:

@@ -378,8 +378,12 @@ class GPUVocabularyTree:
         
         for word_id, count in query_word_counts.items():
             if word_id in self.inverted_index:
-                # IDF weight (log of inverse document frequency)
-                idf = np.log(len(self.image_descriptors) / len(self.inverted_index[word_id]))
+                # IDF weight (log of inverse document frequency) - avoid division by zero
+                word_frequency = len(self.inverted_index[word_id])
+                if word_frequency > 0 and len(self.image_descriptors) > 0:
+                    idf = np.log(max(1, len(self.image_descriptors)) / max(1, word_frequency))
+                else:
+                    idf = 0.0  # Fallback for zero frequency
                 query_tf_idf = count * idf
                 
                 for img_path, img_count in self.inverted_index[word_id]:

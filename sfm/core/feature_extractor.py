@@ -57,7 +57,7 @@ class SuperPointExtractor(BaseFeatureExtractor):
             # Import only SuperPoint, avoid SIFT module that needs pycolmap
             import lightglue
             from lightglue.superpoint import SuperPoint
-            max_keypoints = self.config.get('max_num_keypoints', 2048)
+            max_keypoints = self.config.get('max_num_keypoints', 4096)
             self.model = SuperPoint(max_num_keypoints=max_keypoints).eval().to(self.device)
         except ImportError as e:
             raise ImportError(f"LightGlue SuperPoint not available: {e}. Try: conda install -c conda-forge pycolmap")
