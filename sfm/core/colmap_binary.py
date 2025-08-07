@@ -226,7 +226,7 @@ def create_colmap_database(features: Dict[str, Any], matches: Dict[Tuple[str, st
     conn.commit()
     conn.close()
     
-    logger.info(f"Database created with {len(image_ids)} images and {len(filtered_matches)} match pairs")
+    logger.info(f"Database created with {len(image_ids)} images and {len(matches)} match pairs")
     
     # Verify database contents
     conn = sqlite3.connect(database_path)
