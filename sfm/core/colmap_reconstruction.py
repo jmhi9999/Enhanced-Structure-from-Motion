@@ -3,6 +3,13 @@ COLMAP-based reconstruction using pycolmap for robustness
 Based on hloc approach for reliable SfM
 """
 
+import os
+# Fix CUDA library path issue before importing pycolmap
+if 'CUDA_HOME' not in os.environ:
+    os.environ['CUDA_HOME'] = '/usr/local/cuda-12.2'
+if '/usr/local/cuda-12.2/lib64' not in os.environ.get('LD_LIBRARY_PATH', ''):
+    os.environ['LD_LIBRARY_PATH'] = '/usr/local/cuda-12.2/lib64:' + os.environ.get('LD_LIBRARY_PATH', '')
+
 import sqlite3
 import struct
 from pathlib import Path
