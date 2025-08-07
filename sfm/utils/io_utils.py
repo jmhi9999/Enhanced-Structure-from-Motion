@@ -119,11 +119,19 @@ def save_points3d_bin(filepath: Path, points3d: Dict):
         f.write(num_points.to_bytes(8, byteorder='little'))
         
         for point_id, point in points3d.items():
-            # Write point ID (convert to int if string)
-            if isinstance(point_id, str):
-                point_id_int = int(point_id)
-            else:
-                point_id_int = int(point_id)
+            # Write point ID (convert to int if string, skip if invalid)
+            try:
+                if isinstance(point_id, str):
+                    # Skip non-numeric string keys (like "points", "cameras", etc.)
+                    if not point_id.isdigit():
+                        continue
+                    point_id_int = int(point_id)
+                else:
+                    point_id_int = int(point_id)
+            except (ValueError, TypeError):
+                # Skip invalid point IDs
+                continue
+            
             f.write(point_id_int.to_bytes(8, byteorder='little'))
             
             # Write XYZ coordinates

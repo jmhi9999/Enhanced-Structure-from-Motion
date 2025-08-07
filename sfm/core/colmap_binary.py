@@ -12,8 +12,14 @@ import numpy as np
 from tqdm import tqdm
 import logging
 import cv2
+from collections import namedtuple
 
 logger = logging.getLogger(__name__)
+
+# COLMAP data structures
+Camera = namedtuple("Camera", ["id", "model", "width", "height", "params"])
+Image = namedtuple("Image", ["id", "qvec", "tvec", "camera_id", "name", "xys", "point3D_ids"])
+Point3D = namedtuple("Point3D", ["id", "xyz", "rgb", "error", "image_ids", "point2D_idxs"])
 
 
 def filter_matches_with_magsac(features: Dict[str, Any], matches: Dict[Tuple[str, str], Any]) -> Dict[Tuple[str, str], Any]:
@@ -290,8 +296,94 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -
         return False
 
 
+def read_cameras_binary(path_to_model_file: Path) -> Dict[int, Dict]:
+    """Read cameras.bin file"""
+    cameras = {}
+    with open(path_to_model_file, "rb") as fid:
+        num_cameras = struct.unpack("<Q", fid.read(8))[0]
+        for _ in range(num_cameras):
+            camera_properties = struct.unpack("<iiQQ", fid.read(24))
+            camera_id = camera_properties[0]
+            model_id = camera_properties[1]
+            width = camera_properties[2]
+            height = camera_properties[3]
+            num_params = struct.unpack("<Q", fid.read(8))[0]
+            params = struct.unpack(f"<{num_params}d", fid.read(8 * num_params))
+            cameras[camera_id] = {
+                'model_id': model_id,
+                'model': 'PINHOLE',  # Simplified
+                'width': width,
+                'height': height,
+                'params': list(params)
+            }
+    return cameras
+
+
+def read_images_binary(path_to_model_file: Path) -> Dict[int, Dict]:
+    """Read images.bin file"""
+    images = {}
+    with open(path_to_model_file, "rb") as fid:
+        num_reg_images = struct.unpack("<Q", fid.read(8))[0]
+        for _ in range(num_reg_images):
+            binary_image_properties = struct.unpack("<iidddddi", fid.read(64))
+            image_id = binary_image_properties[0]
+            qvec = np.array(binary_image_properties[1:5])
+            tvec = np.array(binary_image_properties[5:8])
+            camera_id = binary_image_properties[8]
+            
+            # Read image name
+            image_name = ""
+            current_char = struct.unpack("<c", fid.read(1))[0]
+            while current_char != b"\x00":
+                image_name += current_char.decode("utf-8")
+                current_char = struct.unpack("<c", fid.read(1))[0]
+            
+            # Read 2D points
+            num_points2D = struct.unpack("<Q", fid.read(8))[0]
+            x_y_id_s = struct.unpack(f"<{num_points2D * 3}d", fid.read(24 * num_points2D))
+            xys = np.column_stack([np.array(x_y_id_s[0::3]), np.array(x_y_id_s[1::3])])
+            point3D_ids = np.array(x_y_id_s[2::3], dtype=int)
+            
+            images[image_id] = {
+                'qvec': qvec,
+                'tvec': tvec,
+                'camera_id': camera_id,
+                'name': image_name,
+                'xys': xys,
+                'point3D_ids': point3D_ids
+            }
+    return images
+
+
+def read_points3d_binary(path_to_model_file: Path) -> Dict[int, Dict]:
+    """Read points3D.bin file"""
+    points3D = {}
+    with open(path_to_model_file, "rb") as fid:
+        num_points = struct.unpack("<Q", fid.read(8))[0]
+        for _ in range(num_points):
+            binary_point_line_properties = struct.unpack("<QdddBBBd", fid.read(43))
+            point3D_id = binary_point_line_properties[0]
+            xyz = np.array(binary_point_line_properties[1:4])
+            rgb = np.array(binary_point_line_properties[4:7], dtype=int)
+            error = binary_point_line_properties[7]
+            
+            # Read track
+            track_length = struct.unpack("<Q", fid.read(8))[0]
+            track_elems = struct.unpack(f"<{track_length * 2}i", fid.read(8 * track_length))
+            image_ids = np.array(track_elems[0::2])
+            point2D_idxs = np.array(track_elems[1::2])
+            
+            points3D[point3D_id] = {
+                'xyz': xyz,
+                'rgb': rgb,
+                'error': error,
+                'track': list(zip(image_ids, point2D_idxs))
+            }
+    return points3D
+
+
 def read_colmap_binary_results(sparse_path: Path) -> Tuple[Dict, Dict, Dict]:
-    """Read COLMAP binary results"""
+    """Read COLMAP binary results and return proper dictionaries"""
     
     # Look for reconstruction directory
     reconstruction_dirs = [d for d in sparse_path.iterdir() if d.is_dir()]
@@ -320,13 +412,48 @@ def read_colmap_binary_results(sparse_path: Path) -> Tuple[Dict, Dict, Dict]:
         logger.info(f"  - images.bin: {images_size} bytes") 
         logger.info(f"  - points3D.bin: {points_size} bytes")
         
-        # Return placeholder results indicating success
-        # For full integration, would need to implement COLMAP binary readers
-        return {
-            "points": {"count": points_size // 43 if points_size > 0 else 0},  # Rough estimate
-            "cameras": {"count": cameras_size // 64 if cameras_size > 0 else 0},  # Rough estimate  
-            "images": {"count": images_size // 64 if images_size > 0 else 0}   # Rough estimate
-        }, {}, {}
+        # Read actual COLMAP binary files
+        try:
+            cameras = read_cameras_binary(cameras_file)
+            images = read_images_binary(images_file)
+            points3d = read_points3d_binary(points_file)
+            
+            # Log comprehensive reconstruction statistics like hloc
+            num_cameras = len(cameras)
+            num_images = len(images)
+            num_points = len(points3d)
+            
+            # Calculate statistics
+            registered_images = sum(1 for img_data in images.values() if len(img_data.get('point3D_ids', [])) > 0)
+            observations = sum(len(point_data.get('track', [])) for point_data in points3d.values())
+            mean_track_length = observations / num_points if num_points > 0 else 0.0
+            mean_observations_per_image = observations / registered_images if registered_images > 0 else 0.0
+            
+            # Calculate reprojection errors if available
+            errors = [point_data.get('error', 0.0) for point_data in points3d.values()]
+            mean_reprojection_error = np.mean(errors) if errors else 0.0
+            
+            logger.info("=" * 50)
+            logger.info("RECONSTRUCTION STATISTICS")
+            logger.info("=" * 50)
+            logger.info(f"Cameras: {num_cameras}")
+            logger.info(f"Images: {num_images}")
+            logger.info(f"Registered images: {registered_images}")
+            logger.info(f"Points: {num_points}")
+            logger.info(f"Observations: {observations}")
+            logger.info(f"Mean track length: {mean_track_length:.2f}")
+            logger.info(f"Mean observations per image: {mean_observations_per_image:.2f}")
+            logger.info(f"Mean reprojection error: {mean_reprojection_error:.4f} px")
+            logger.info("=" * 50)
+            
+            return points3d, cameras, images
+            
+        except Exception as e:
+            logger.error(f"Error reading COLMAP binary files: {e}")
+            logger.info("Falling back to empty dictionaries")
+            
+            # Return empty dictionaries with proper structure
+            return {}, {}, {}
     else:
         logger.error("COLMAP reconstruction files not found")
         missing = []
