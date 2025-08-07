@@ -223,8 +223,20 @@ class GPUBruteForceMatcher:
         if not LIGHTGLUE_AVAILABLE:
             raise ImportError("LightGlue is not available. Please install it.")
         
+        # Map feature types to their correct LightGlue identifiers and configurations
+        feature_mapping = {
+            'superpoint': 'superpoint',
+            'aliked': 'aliked',
+            'disk': 'disk'
+        }
+        
+        if self.feature_type not in feature_mapping:
+            raise ValueError(f"Unsupported feature type: {self.feature_type}")
+        
+        lightglue_features = feature_mapping[self.feature_type]
+        
         lightglue_conf = {
-            "features": self.feature_type,
+            "features": lightglue_features,
             "depth_confidence": self.config.get('depth_confidence', 0.95),
             "width_confidence": self.config.get('width_confidence', 0.99),
             "compile": self.config.get('compile', False),
