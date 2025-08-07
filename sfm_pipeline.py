@@ -402,25 +402,20 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     stage_times['geometric_verification'] = 0.0
     verified_matches = matches  # Use raw matches
     
-    # Stage 6: COLMAP-based SfM reconstruction (like hloc)
-    logger.info("Stage 6: COLMAP-based SfM reconstruction...")
+    # Stage 6: COLMAP-based SfM reconstruction using binary (avoid pycolmap CUDA issues)
+    logger.info("Stage 6: COLMAP-based SfM reconstruction using binary...")
     stage_start = time.time()
     
-    from sfm.core.colmap_reconstruction import COLMAPReconstruction
+    from sfm.core.colmap_binary import colmap_binary_reconstruction
     
-    reconstruction = COLMAPReconstruction(
-        output_path=output_path,
-        device=str(device)
-    )
-    
-    # Use matches instead of verified_matches for now (COLMAP will handle verification)  
     # Extract image directory from first image path
     first_image_path = Path(next(iter(features.keys())))
     image_dir = first_image_path.parent
     
-    sparse_points, cameras, images = reconstruction.reconstruct(
+    sparse_points, cameras, images = colmap_binary_reconstruction(
         features=features,
         matches=matches,  # Use raw matches, COLMAP will verify
+        output_path=output_path,
         image_dir=image_dir
     )
     
