@@ -313,7 +313,7 @@ class GeometricVerification:
             return F, inliers
             
         except cv2.error as e:
-            logger.warning(f"OpenCV fundamental matrix failed: {e}, trying fallback")
+            logger.debug(f"OpenCV fundamental matrix failed: {e}, trying fallback")
             return self._find_fundamental_fallback(points1, points2)
     
     def _find_essential_pyransac(self, 

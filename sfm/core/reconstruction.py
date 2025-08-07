@@ -192,11 +192,11 @@ class IncrementalSfM:
         
         # Get 2D-3D correspondences
         points2d, points3d = self._get_2d3d_correspondences(
-            kpts_new, kpts_registered, matches_new, matches_registered
+            kpts_new, kpts_registered, matches_new, matches_registered, best_registered_img
         )
         
         print(f"Found {len(points2d)} 2D-3D correspondences for {img_path}")
-        if len(points2d) < 6:
+        if len(points2d) < 4:
             # Try to find more correspondences or lower the threshold
             print(f"Not enough 2D-3D correspondences ({len(points2d)}), trying alternative approach...")
             raise ValueError("Not enough 2D-3D correspondences")
@@ -242,34 +242,71 @@ class IncrementalSfM:
         best_img = None
         best_score = 0
         
+        # First pass: look for exact matches in both directions
         for (img1, img2), match_data in matches.items():
             if img1 == img_path and img2 in self.images:
-                if len(match_data['matches0']) > best_score:
-                    best_score = len(match_data['matches0'])
+                score = len(match_data.get('matches0', []))
+                if score > best_score:
+                    best_score = score
                     best_img = img2
             elif img2 == img_path and img1 in self.images:
-                if len(match_data['matches1']) > best_score:
-                    best_score = len(match_data['matches1'])
+                score = len(match_data.get('matches1', []))
+                if score > best_score:
+                    best_score = score
                     best_img = img1
         
+        # If no exact match found, try path matching (handle relative vs absolute paths)
+        if best_img is None:
+            from pathlib import Path
+            img_name = Path(img_path).name
+            
+            for (img1, img2), match_data in matches.items():
+                img1_name = Path(img1).name
+                img2_name = Path(img2).name
+                
+                if img1_name == img_name and img2 in self.images:
+                    score = len(match_data.get('matches0', []))
+                    if score > best_score:
+                        best_score = score
+                        best_img = img2
+                elif img2_name == img_name and img1 in self.images:
+                    score = len(match_data.get('matches1', []))
+                    if score > best_score:
+                        best_score = score
+                        best_img = img1
+        
+        if best_img is not None:
+            print(f"Found best registered image {best_img} with {best_score} matches")
+        else:
+            print(f"No registered image found for {img_path}")
+            print(f"Registered images: {list(self.images.keys())}")
+            print(f"Available match pairs: {len(matches)} pairs")
+            
         return best_img
     
     def _get_2d3d_correspondences(self, kpts_new: np.ndarray, kpts_registered: np.ndarray,
-                                 matches_new: np.ndarray, matches_registered: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+                                 matches_new: np.ndarray, matches_registered: np.ndarray, 
+                                 registered_img_path: str) -> Tuple[np.ndarray, np.ndarray]:
         """Get 2D-3D correspondences for PnP"""
         points2d = []
         points3d = []
         
+        # Get the registered image data
+        if registered_img_path not in self.images:
+            return np.array(points2d), np.array(points3d)
+            
+        registered_img_data = self.images[registered_img_path]
+        
         for i, (match_new, match_registered) in enumerate(zip(matches_new, matches_registered)):
+            # Check if match indices are valid
+            if match_registered >= len(registered_img_data['point3D_ids']):
+                continue
+                
             # Check if the registered point has a 3D point
-            registered_img = None
-            for img_path in self.images:
-                if img_path in self.images:
-                    point3d_id = self.images[img_path]['point3D_ids'][match_registered]
-                    if point3d_id != -1 and point3d_id in self.points3d:
-                        points2d.append(kpts_new[match_new])
-                        points3d.append(self.points3d[point3d_id]['xyz'])
-                        break
+            point3d_id = registered_img_data['point3D_ids'][match_registered]
+            if point3d_id != -1 and point3d_id in self.points3d:
+                points2d.append(kpts_new[match_new])
+                points3d.append(self.points3d[point3d_id]['xyz'])
         
         return np.array(points2d), np.array(points3d)
     

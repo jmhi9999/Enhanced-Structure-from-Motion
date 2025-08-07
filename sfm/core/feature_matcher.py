@@ -75,9 +75,9 @@ class EnhancedLightGlueMatcher:
         self.parallel_workers = min(self.config.get('parallel_workers', 8), torch.get_num_threads())
         self.batch_size = self.config.get('batch_size', 32)
         
-        # Matching parameters
-        self.confidence_threshold = self.config.get('confidence_threshold', 0.2)
-        self.min_matches = self.config.get('min_matches', 8)
+        # Matching parameters - More permissive for reconstruction
+        self.confidence_threshold = self.config.get('confidence_threshold', 0.1)
+        self.min_matches = self.config.get('min_matches', 4)
         
         # Timing statistics
         self.timing_stats = {
