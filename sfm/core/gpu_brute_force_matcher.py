@@ -355,7 +355,19 @@ class GPUBruteForceMatcher:
                 }
                 # Match features using LightGlue
                 with torch.no_grad():
-                    pred = self.matcher(data)
+                    try:
+                        pred = self.matcher(data)
+                    except AssertionError as e:
+                        # Debug dimension mismatch
+                        desc1_shape = data['image0']['descriptors'].shape
+                        desc2_shape = data['image1']['descriptors'].shape
+                        expected_dim = self.matcher.conf.input_dim
+                        raise AssertionError(
+                            f"LightGlue dimension mismatch: "
+                            f"desc1={desc1_shape}, desc2={desc2_shape}, "
+                            f"expected_dim={expected_dim}, "
+                            f"feature_type={self.feature_type}"
+                        ) from e
                 # Process matches
                 if 'matches' in pred and len(pred['matches']) > 0:
                     matches_tensor = pred['matches']

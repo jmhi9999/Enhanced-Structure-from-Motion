@@ -160,6 +160,11 @@ class ALIKEDExtractor(BaseFeatureExtractor):
                 descriptors = pred['descriptors'][0].cpu().numpy()
                 scores = pred['keypoint_scores'][0].cpu().numpy()
                 
+                # Debug descriptor dimensions
+                print(f"ALIKED descriptor shape for {image_path}: {descriptors.shape}")
+                if descriptors.shape[-1] != 128:
+                    print(f"WARNING: Expected 128-dim descriptors, got {descriptors.shape[-1]}")
+                
                 features[image_path] = {
                     'keypoints': keypoints,
                     'descriptors': descriptors,
