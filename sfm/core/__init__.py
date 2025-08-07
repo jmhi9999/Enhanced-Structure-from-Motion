@@ -6,7 +6,6 @@ Core SfM components
 from .feature_extractor import FeatureExtractor
 from .feature_matcher import FeatureMatcher
 from .geometric_verification import GeometricVerification
-from .reconstruction import Reconstruction
 # Dense depth - optional import to avoid transformer dependency issues
 try:
     from .dense_depth import DenseDepthEstimator
@@ -15,15 +14,8 @@ except (ImportError, TypeError, AttributeError):
     DENSE_DEPTH_AVAILABLE = False
     DenseDepthEstimator = None
 from .scale_recovery import ScaleRecovery
-from .distributed_processor import DistributedProcessor
 
 # GPU modules - optional imports
-try:
-    from .gpu_advanced_magsac import GPUAdvancedMAGSAC
-    GPU_MAGSAC_AVAILABLE = True
-except ImportError:
-    GPU_MAGSAC_AVAILABLE = False
-    GPUAdvancedMAGSAC = None
 
 try:
     from .gpu_bundle_adjustment import GPUBundleAdjustment
@@ -62,10 +54,6 @@ def bundle_adjustment(points3d, cameras, config=None):
     ba = GPUBundleAdjustment(config or {})
     return ba.optimize(points3d, cameras)
 
-def reconstruct_3d(features, matches, config=None):
-    """Perform 3D reconstruction"""
-    reconstruction = Reconstruction(config or {})
-    return reconstruction.reconstruct(features, matches)
 
 def estimate_dense_depth(images, config=None):
     """Estimate dense depth maps"""
@@ -85,15 +73,12 @@ __all__ = [
     "FeatureExtractor",
     "FeatureMatcher", 
     "GeometricVerification",
-    "Reconstruction",
     "ScaleRecovery",
-    "DistributedProcessor",
     # Convenience functions
     "extract_features",
     "match_features", 
     "verify_geometry",
     "bundle_adjustment",
-    "reconstruct_3d",
     "recover_scale"
 ]
 
@@ -102,8 +87,6 @@ if DENSE_DEPTH_AVAILABLE:
     __all__.extend(["DenseDepthEstimator", "estimate_dense_depth"])
 
 # Add GPU classes if available
-if GPU_MAGSAC_AVAILABLE:
-    __all__.append("GPUAdvancedMAGSAC")
 if GPU_BA_AVAILABLE:
     __all__.append("GPUBundleAdjustment")
 if GPU_VOCAB_AVAILABLE:

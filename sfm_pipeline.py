@@ -20,7 +20,6 @@ from tqdm import tqdm
 from sfm.core.feature_extractor import FeatureExtractorFactory
 from sfm.core.feature_matcher import EnhancedLightGlueMatcher
 from sfm.core.geometric_verification import GeometricVerification, RANSACMethod
-from sfm.core.reconstruction import IncrementalSfM
 from sfm.core.gpu_bundle_adjustment import GPUBundleAdjustment
 from sfm.core.dense_depth import DenseDepthEstimator
 from sfm.core.gpu_vocabulary_tree import GPUVocabularyTree

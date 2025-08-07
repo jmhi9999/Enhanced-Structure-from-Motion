@@ -14,17 +14,8 @@ import time
 try:
     import torch
     GPU_AVAILABLE = torch.cuda.is_available()
-    try:
-        # Only import if all GPU dependencies are available
-        import cupy
-        import faiss
-        from .gpu_advanced_magsac import GPUAdvancedMAGSAC
-    except (ImportError, AttributeError):
-        GPU_AVAILABLE = False
-        GPUAdvancedMAGSAC = None
 except ImportError:
     GPU_AVAILABLE = False
-    GPUAdvancedMAGSAC = None
 
 try:
     import pyransac
@@ -39,7 +30,6 @@ class RANSACMethod(Enum):
     """Available RANSAC methods for geometric verification"""
     OPENCV_MAGSAC = "opencv_magsac"
     PYRANSAC = "pyransac"
-    GPU_ADVANCED_MAGSAC = "gpu_advanced_magsac"
 
 
 class GeometricVerification:
@@ -101,16 +91,7 @@ class GeometricVerification:
     
     def _init_method(self, **kwargs):
         """Initialize the chosen RANSAC method"""
-        if self.method == RANSACMethod.GPU_ADVANCED_MAGSAC:
-            if not GPU_AVAILABLE or GPUAdvancedMAGSAC is None:
-                logger.warning("GPU Advanced MAGSAC not available, falling back to OpenCV MAGSAC")
-                self.method = RANSACMethod.OPENCV_MAGSAC
-                self.gpu_magsac = None
-            else:
-                self.gpu_magsac = GPUAdvancedMAGSAC(self.device)
-                logger.info("GPU Advanced MAGSAC initialized")
-        
-        elif self.method == RANSACMethod.PYRANSAC:
+        if self.method == RANSACMethod.PYRANSAC:
             if not PYRANSAC_AVAILABLE:
                 logger.warning("pyransac not available, falling back to OpenCV MAGSAC")
                 self.method = RANSACMethod.OPENCV_MAGSAC
@@ -152,10 +133,7 @@ class GeometricVerification:
             return None, None
         
         try:
-            if self.method == RANSACMethod.GPU_ADVANCED_MAGSAC and self.gpu_magsac is not None:
-                E, inliers = self._find_essential_gpu_advanced(points1, points2, intrinsics)
-            
-            elif self.method == RANSACMethod.PYRANSAC and PYRANSAC_AVAILABLE:
+            if self.method == RANSACMethod.PYRANSAC and PYRANSAC_AVAILABLE:
                 E, inliers = self._find_essential_pyransac(points1, points2, intrinsics)
             
             else:  # OpenCV MAGSAC (default)
@@ -196,10 +174,7 @@ class GeometricVerification:
         points2 = points2.astype(np.float32)
         
         try:
-            if self.method == RANSACMethod.GPU_ADVANCED_MAGSAC and self.gpu_magsac is not None:
-                F, inliers = self._find_fundamental_gpu_advanced(points1, points2)
-            
-            elif self.method == RANSACMethod.PYRANSAC and PYRANSAC_AVAILABLE:
+            if self.method == RANSACMethod.PYRANSAC and PYRANSAC_AVAILABLE:
                 F, inliers = self._find_fundamental_pyransac(points1, points2)
             
             else:  # OpenCV MAGSAC (default)
@@ -391,8 +366,6 @@ class GeometricVerification:
             'pyransac_available': PYRANSAC_AVAILABLE
         }
         
-        if self.method == RANSACMethod.GPU_ADVANCED_MAGSAC and self.gpu_magsac is not None:
-            info.update(self.gpu_magsac.get_performance_stats())
         
         return info
     
@@ -404,8 +377,6 @@ class GeometricVerification:
         if PYRANSAC_AVAILABLE:
             methods.append(RANSACMethod.PYRANSAC)
         
-        if GPU_AVAILABLE and GPUAdvancedMAGSAC is not None:
-            methods.append(RANSACMethod.GPU_ADVANCED_MAGSAC)
         
         return methods
     
@@ -675,10 +646,6 @@ class GeometricVerification:
         # For small datasets, OpenCV is usually fastest
         if num_points < 1000:
             return RANSACMethod.OPENCV_MAGSAC
-        
-        # For large datasets with GPU, use GPU Advanced MAGSAC
-        if num_points > 5000 and has_gpu and GPUAdvancedMAGSAC is not None:
-            return RANSACMethod.GPU_ADVANCED_MAGSAC
         
         # For medium datasets, OpenCV MAGSAC is still reliable
         return RANSACMethod.OPENCV_MAGSAC

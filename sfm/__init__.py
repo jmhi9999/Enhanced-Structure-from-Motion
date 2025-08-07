@@ -6,19 +6,32 @@ GPU-accelerated SfM pipeline with modern feature extractors and matchers
 __version__ = "0.1.0"
 
 # Import and expose the main pipeline function
-import sys
-from pathlib import Path
+def get_sfm_pipeline():
+    """Lazy import of sfm_pipeline to avoid circular imports"""
+    import sys
+    from pathlib import Path
+    
+    # Add parent directory to path to import sfm_pipeline
+    _parent_dir = str(Path(__file__).parent.parent)
+    if _parent_dir not in sys.path:
+        sys.path.insert(0, _parent_dir)
+    
+    from sfm_pipeline import sfm_pipeline
+    return sfm_pipeline
 
-# Add parent directory to path to import sfm_pipeline
-_parent_dir = str(Path(__file__).parent.parent)
-if _parent_dir not in sys.path:
-    sys.path.insert(0, _parent_dir)
-
-from sfm_pipeline import sfm_pipeline
+# Lazy-loaded sfm_pipeline
+sfm_pipeline = None
 
 # Lazy imports for heavy dependencies - only import when actually used
 def __getattr__(name):
     """Lazy import for module attributes"""
+    global sfm_pipeline
+    
+    # Handle sfm_pipeline specially
+    if name == "sfm_pipeline":
+        if sfm_pipeline is None:
+            sfm_pipeline = get_sfm_pipeline()
+        return sfm_pipeline
     
     # For heavy components, import only when needed
     if name == "FeatureExtractorFactory":
@@ -33,9 +46,6 @@ def __getattr__(name):
     elif name == "RANSACMethod":
         from .core.geometric_verification import RANSACMethod
         return RANSACMethod
-    elif name == "IncrementalSfM":
-        from .core.reconstruction import IncrementalSfM
-        return IncrementalSfM
     elif name == "GPUBundleAdjustment":
         from .core.gpu_bundle_adjustment import GPUBundleAdjustment
         return GPUBundleAdjustment
@@ -79,7 +89,6 @@ __all__ = [
     "EnhancedLightGlueMatcher", 
     "GeometricVerification",
     "RANSACMethod",
-    "IncrementalSfM",
     "GPUBundleAdjustment",
     "DenseDepthEstimator",
     "GPUVocabularyTree",
