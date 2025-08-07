@@ -204,6 +204,9 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     features_file = output_path / "features.h5"
     features_tensor_file = output_path / "features_tensors.pt"
     
+    # Try to load existing features from both H5 and tensor formats
+    features = None
+    
     if features_file.exists() and features_tensor_file.exists():
         try:
             # Load existing features and validate
@@ -221,10 +224,32 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
                 logger.info(f"Feature count mismatch: {len(existing_features)} vs {len(processed_images)}, re-extracting")
                 raise ValueError("Feature count mismatch")
         except Exception as e:
-            logger.info(f"Could not load existing features ({e}), extracting new ones")
+            logger.info(f"Could not load existing features ({e}), trying tensor file only")
             features = None
-    else:
-        features = None
+    
+    # Fallback: try to load only from tensor file if H5 failed
+    if features is None and features_tensor_file.exists():
+        try:
+            existing_tensors = torch.load(features_tensor_file, map_location=device)
+            if len(existing_tensors) == len(processed_images):
+                logger.info(f"Found existing tensor features for {len(existing_tensors)} images, using those")
+                # Convert tensor format to expected format
+                features = {}
+                for img_path, tensor_data in existing_tensors.items():
+                    features[img_path] = {
+                        'keypoints': tensor_data['keypoints'].cpu().numpy() if torch.is_tensor(tensor_data['keypoints']) else tensor_data['keypoints'],
+                        'descriptors': tensor_data['descriptors'].cpu().numpy() if torch.is_tensor(tensor_data['descriptors']) else tensor_data['descriptors'],
+                        'scores': tensor_data['scores'].cpu().numpy() if torch.is_tensor(tensor_data['scores']) else tensor_data['scores'],
+                        'image_shape': tensor_data['image_shape']
+                    }
+                features_tensors = existing_tensors
+                stage_times['feature_extraction'] = 0.0
+            else:
+                logger.info(f"Tensor feature count mismatch: {len(existing_tensors)} vs {len(processed_images)}, re-extracting")
+                features = None
+        except Exception as e:
+            logger.info(f"Could not load tensor features ({e}), extracting new ones")
+            features = None
     
     if features is None:
         feature_extractor = FeatureExtractorFactory.create(
@@ -335,8 +360,20 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     if matches is None:
         matcher = EnhancedLightGlueMatcher(device=device)
         
+        # Ensure features are in the correct format for the matcher
+        # If features were loaded from tensor file, ensure numpy format
+        formatted_features = {}
+        for img_path, feat_data in features.items():
+            formatted_feat = {}
+            for key, value in feat_data.items():
+                if torch.is_tensor(value):
+                    formatted_feat[key] = value.cpu().numpy()
+                else:
+                    formatted_feat[key] = value
+            formatted_features[img_path] = formatted_feat
+        
         # Use the enhanced matcher which processes all features at once
-        matches = matcher.match_features(features)
+        matches = matcher.match_features(formatted_features)
         
         # Create tensor version for backup
         matches_tensors = {}
