@@ -357,7 +357,8 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         matches = None
     
     if matches is None:
-        matcher = EnhancedLightGlueMatcher(device=device)
+        feature_type = kwargs.get('feature_extractor', 'superpoint')
+        matcher = EnhancedLightGlueMatcher(device=device, feature_type=feature_type)
         
         # Ensure features are in the correct format for the matcher
         # If features were loaded from tensor file, ensure numpy format
