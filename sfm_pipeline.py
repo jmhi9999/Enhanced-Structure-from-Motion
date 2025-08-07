@@ -397,103 +397,35 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         stage_times['feature_matching'] = time.time() - stage_start
         logger.info(f"Feature matching completed in {stage_times['feature_matching']:.2f}s")
     
-    # Stage 5: Geometric verification
-    logger.info("Stage 5: Geometric verification...")
+    # Stage 5: Skip geometric verification - let COLMAP handle it
+    logger.info("Stage 5: Skipping separate geometric verification (COLMAP will handle)...")
+    stage_times['geometric_verification'] = 0.0
+    verified_matches = matches  # Use raw matches
+    
+    # Stage 6: COLMAP-based SfM reconstruction (like hloc)
+    logger.info("Stage 6: COLMAP-based SfM reconstruction...")
     stage_start = time.time()
     
-    # Check if verified matches already exist
-    verified_matches_file = output_path / "verified_matches.h5"
-    verified_tensors_file = output_path / "verified_tensors.pt"
+    from sfm.core.colmap_reconstruction import COLMAPReconstruction
     
-    # Calculate expected number of verified matches
-    expected_verified = len(matches) * 0.5  # Expect ~50% to pass geometric verification
-    
-    if verified_matches_file.exists() and verified_tensors_file.exists():
-        try:
-            # Load existing verified matches
-            verified_matches = torch.load(verified_matches_file, map_location='cpu')
-            verified_tensors = torch.load(verified_tensors_file, map_location=device)
-            
-            # Convert tensor dict back to numpy format for compatibility
-            verified_matches_numpy = {}
-            for pair, tensor_data in verified_matches.items():
-                verified_matches_numpy[pair] = {
-                    k: v.cpu().numpy() if torch.is_tensor(v) else v 
-                    for k, v in tensor_data.items()
-                }
-            
-            # Check if we have reasonable number of verified matches
-            if len(verified_matches) >= expected_verified * 0.5:  # At least 25% of original matches
-                logger.info(f"Found existing verified matches for {len(verified_matches)} pairs (expected ~{int(expected_verified)}), skipping verification")
-                verified_matches = verified_matches_numpy
-                stage_times['geometric_verification'] = 0.0
-            else:
-                logger.info(f"Verified match count too low: {len(verified_matches)} vs expected ~{int(expected_verified)}, re-verifying")
-                raise ValueError("Verified match count too low")
-        except Exception as e:
-            logger.info(f"Could not load existing verified matches ({e}), verifying new ones")
-            verified_matches = None
-    else:
-        verified_matches = None
-    
-    if verified_matches is None:
-        geometric_verifier = GeometricVerification(
-            method=RANSACMethod.OPENCV_MAGSAC,
-            device=device,
-            confidence=0.999,
-            max_iterations=5000,
-            threshold=1.0
-        )
-        
-        verified_matches = {}
-        verified_tensors = {}
-        
-        for pair, match in tqdm(matches.items(), desc="Verifying matches"):
-            img1, img2 = pair
-            if img1 in features and img2 in features:
-                verified_match = geometric_verifier.verify_matches(
-                    features[img1], features[img2], match
-                )
-                if verified_match is not None:
-                    verified_matches[pair] = verified_match
-                    
-                    # Store tensor version for backup
-                    verified_tensors[pair] = {
-                        'matches0': torch.from_numpy(verified_match['matches0']).to(device),
-                        'matches1': torch.from_numpy(verified_match['matches1']).to(device),
-                        'mscores0': torch.from_numpy(verified_match['mscores0']).to(device),
-                        'mscores1': torch.from_numpy(verified_match['mscores1']).to(device),
-                        'fundamental_matrix': torch.from_numpy(verified_match['fundamental_matrix']).to(device) if verified_match.get('fundamental_matrix') is not None else None,
-                        'inliers': torch.from_numpy(verified_match['inliers']).to(device) if verified_match.get('inliers') is not None else None,
-                        'image_shape0': verified_match['image_shape0'],
-                        'image_shape1': verified_match['image_shape1']
-                    }
-        
-        # Save verified matches in tensor format (more compact)
-        torch.save(verified_matches, verified_matches_file)
-        torch.save(verified_tensors, verified_tensors_file)
-        logger.info(f"Saved verified match tensors to {verified_tensors_file}")
-        
-        stage_times['geometric_verification'] = time.time() - stage_start
-        logger.info(f"Geometric verification completed in {stage_times['geometric_verification']:.2f}s")
-    
-    # Stage 6: Incremental SfM reconstruction
-    logger.info("Stage 6: Incremental SfM reconstruction...")
-    stage_start = time.time()
-    
-    reconstruction = IncrementalSfM(
-        device=device,
-        max_image_size=kwargs.get('max_image_size', 1600)
+    reconstruction = COLMAPReconstruction(
+        output_path=output_path,
+        device=str(device)
     )
+    
+    # Use matches instead of verified_matches for now (COLMAP will handle verification)  
+    # Extract image directory from first image path
+    first_image_path = Path(next(iter(features.keys())))
+    image_dir = first_image_path.parent
     
     sparse_points, cameras, images = reconstruction.reconstruct(
         features=features,
-        matches=verified_matches,
-        image_paths=image_paths
+        matches=matches,  # Use raw matches, COLMAP will verify
+        image_dir=image_dir
     )
     
     stage_times['sfm_reconstruction'] = time.time() - stage_start
-    logger.info(f"SfM reconstruction completed in {stage_times['sfm_reconstruction']:.2f}s")
+    logger.info(f"COLMAP SfM reconstruction completed in {stage_times['sfm_reconstruction']:.2f}s")
     
     # Stage 7: GPU Bundle Adjustment (optional)
     if kwargs.get('use_gpu_ba', False) and device.type == "cuda":
