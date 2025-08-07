@@ -43,8 +43,9 @@ def save_cameras_bin(filepath: Path, cameras: Dict):
         f.write(num_cameras.to_bytes(8, byteorder='little'))
         
         for camera_id, camera in cameras.items():
-            # Write camera ID
-            f.write(camera_id.to_bytes(4, byteorder='little'))
+            # Write camera ID (convert to int if string)
+            camera_id_int = int(camera_id) if isinstance(camera_id, str) else int(camera_id)
+            f.write(camera_id_int.to_bytes(4, byteorder='little'))
             
             # Write model name
             model_name = camera['model'].encode('utf-8')
@@ -74,8 +75,9 @@ def save_images_bin(filepath: Path, images: Dict):
             image_id = hash(image_path) % (2**31)  # 32-bit positive integer
             f.write(image_id.to_bytes(4, byteorder='little'))
             
-            # Write camera ID
-            f.write(image['camera_id'].to_bytes(4, byteorder='little'))
+            # Write camera ID (convert to int if string)
+            camera_id_int = int(image['camera_id']) if isinstance(image['camera_id'], str) else int(image['camera_id'])
+            f.write(camera_id_int.to_bytes(4, byteorder='little'))
             
             # Write image name
             image_name = image['name'].encode('utf-8')
@@ -104,7 +106,9 @@ def save_images_bin(filepath: Path, images: Dict):
             # Write point3D IDs
             point3d_ids = image['point3D_ids']
             for point3d_id in point3d_ids:
-                f.write(point3d_id.to_bytes(4, byteorder='little'))
+                # Convert ID to int if string
+                point3d_id_int = int(point3d_id) if isinstance(point3d_id, str) else int(point3d_id)
+                f.write(point3d_id_int.to_bytes(4, byteorder='little'))
 
 
 def save_points3d_bin(filepath: Path, points3d: Dict):
@@ -115,8 +119,12 @@ def save_points3d_bin(filepath: Path, points3d: Dict):
         f.write(num_points.to_bytes(8, byteorder='little'))
         
         for point_id, point in points3d.items():
-            # Write point ID
-            f.write(point_id.to_bytes(8, byteorder='little'))
+            # Write point ID (convert to int if string)
+            if isinstance(point_id, str):
+                point_id_int = int(point_id)
+            else:
+                point_id_int = int(point_id)
+            f.write(point_id_int.to_bytes(8, byteorder='little'))
             
             # Write XYZ coordinates
             xyz = point['xyz']
@@ -137,8 +145,11 @@ def save_points3d_bin(filepath: Path, points3d: Dict):
             
             # Write track elements
             for image_id, point2d_id in track:
-                f.write(image_id.to_bytes(4, byteorder='little'))
-                f.write(point2d_id.to_bytes(4, byteorder='little'))
+                # Convert IDs to int if string
+                image_id_int = int(image_id) if isinstance(image_id, str) else int(image_id)
+                point2d_id_int = int(point2d_id) if isinstance(point2d_id, str) else int(point2d_id)
+                f.write(image_id_int.to_bytes(4, byteorder='little'))
+                f.write(point2d_id_int.to_bytes(4, byteorder='little'))
 
 
 def save_dense_depth_maps(output_dir: Path, depth_maps: Dict[str, np.ndarray]):
