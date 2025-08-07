@@ -11,8 +11,80 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from tqdm import tqdm
 import logging
+import cv2
 
 logger = logging.getLogger(__name__)
+
+
+def filter_matches_with_magsac(features: Dict[str, Any], matches: Dict[Tuple[str, str], Any]) -> Dict[Tuple[str, str], Any]:
+    """Filter matches using cv2.USAC_MAGSAC geometric verification"""
+    logger.info("Filtering matches with cv2 USAC_MAGSAC...")
+    
+    filtered_matches = {}
+    
+    for (img1_path, img2_path), match_data in tqdm(matches.items(), desc="MAGSAC filtering"):
+        try:
+            # Get keypoints for both images
+            kpts1 = features[img1_path]['keypoints']
+            kpts2 = features[img2_path]['keypoints']
+            
+            # Get matched keypoint indices
+            matches0 = match_data['matches0']
+            matches1 = match_data['matches1']
+            
+            # Filter out invalid matches (-1)
+            valid_mask = (matches0 >= 0) & (matches1 >= 0)
+            if not valid_mask.any():
+                continue
+                
+            valid_matches0 = matches0[valid_mask]
+            valid_matches1 = matches1[valid_mask]
+            
+            # Get matched keypoints
+            matched_kpts1 = kpts1[valid_matches0]
+            matched_kpts2 = kpts2[valid_matches1]
+            
+            if len(matched_kpts1) < 8:  # Need at least 8 points for fundamental matrix
+                continue
+            
+            # Run MAGSAC
+            F_matrix, inlier_mask = cv2.findFundamentalMat(
+                matched_kpts1.astype(np.float32),
+                matched_kpts2.astype(np.float32),
+                method=cv2.USAC_MAGSAC,
+                ransacReprojThreshold=1.0,
+                confidence=0.999,
+                maxIters=10000
+            )
+            
+            if F_matrix is None or inlier_mask is None:
+                continue
+            
+            # Keep only inlier matches
+            inlier_mask = inlier_mask.ravel().astype(bool)
+            if inlier_mask.sum() < 4:  # Need minimum matches
+                continue
+            
+            # Update match data with filtered matches
+            filtered_matches0 = valid_matches0[inlier_mask]
+            filtered_matches1 = valid_matches1[inlier_mask]
+            
+            # Create new match data
+            filtered_matches[(img1_path, img2_path)] = {
+                'matches0': filtered_matches0,
+                'matches1': filtered_matches1,
+                'mscores0': match_data['mscores0'][valid_mask][inlier_mask] if 'mscores0' in match_data else np.ones(len(filtered_matches0)),
+                'mscores1': match_data['mscores1'][valid_mask][inlier_mask] if 'mscores1' in match_data else np.ones(len(filtered_matches1))
+            }
+            
+            logger.debug(f"Match {Path(img1_path).name} - {Path(img2_path).name}: {len(valid_matches0)} -> {len(filtered_matches0)} matches")
+            
+        except Exception as e:
+            logger.warning(f"MAGSAC filtering failed for {Path(img1_path).name} - {Path(img2_path).name}: {e}")
+            continue
+    
+    logger.info(f"MAGSAC filtering: {len(matches)} -> {len(filtered_matches)} pairs")
+    return filtered_matches
 
 
 def create_colmap_database(features: Dict[str, Any], matches: Dict[Tuple[str, str], Any], 
@@ -163,28 +235,10 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -
     sparse_path = output_path / "sparse"
     sparse_path.mkdir(exist_ok=True)
     
-    # Step 1: Geometric verification
-    logger.info("Running COLMAP matches_importer...")
-    cmd = [
-        "colmap", "matches_importer",
-        "--database_path", str(database_path),
-        "--match_list_path", "-",  # We don't have a match list file
-        "--match_type", "pairs"
-    ]
+    # Skip COLMAP geometric verification since we already did MAGSAC filtering
+    logger.info("Skipping COLMAP geometric verification (already done with cv2 MAGSAC)")
     
-    # Skip matches_importer if we already have matches in database
-    # Step 2: Feature extraction (already done, skip)
-    
-    # Step 3: Geometric verification
-    logger.info("Running COLMAP geometric verification...")
-    cmd = [
-        "colmap", "matches_importer",
-        "--database_path", str(database_path),
-        "--match_list_path", "/dev/null"
-    ]
-    # Skip this for now since matches are already in DB
-    
-    # Step 4: Incremental mapping (hloc-style minimal options)
+    # Step 2: Incremental mapping (hloc-style minimal options)
     logger.info("Running COLMAP incremental mapping...")
     cmd = [
         "colmap", "mapper",
@@ -239,8 +293,15 @@ def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[s
     
     database_path = output_path / "database.db"
     
-    # Create database
-    image_ids = create_colmap_database(features, matches, database_path)
+    # First filter matches with cv2 MAGSAC
+    filtered_matches = filter_matches_with_magsac(features, matches)
+    
+    if not filtered_matches:
+        logger.error("No matches passed MAGSAC filtering")
+        return {}, {}, {}
+    
+    # Create database with filtered matches
+    image_ids = create_colmap_database(features, filtered_matches, database_path)
     
     # Run COLMAP binary
     success = run_colmap_binary(database_path, image_dir, output_path)
