@@ -86,14 +86,22 @@ class DenseDepthEstimator:
         print("Estimating dense depth maps with monocular depth estimation...")
         dense_depth_maps = {}
         
-        for img_path, img_data in tqdm(images.items(), desc="Generating dense depth maps"):
+        for img_key, img_data in tqdm(images.items(), desc="Generating dense depth maps"):
             try:
+                # Handle both path-based and ID-based keys for robustness
+                if isinstance(img_key, (int, np.integer)):
+                    # If key is numeric ID, use image name from data
+                    img_path = img_data.get('name', f'image_{img_key}')
+                else:
+                    # If key is already a path, use it directly
+                    img_path = img_key
+                    
                 depth_map = self._estimate_depth_for_image(
                     img_path, img_data, cameras, sparse_points, features
                 )
                 dense_depth_maps[img_path] = depth_map
             except Exception as e:
-                print(f"Warning: Failed to estimate depth for {img_path}: {e}")
+                print(f"Warning: Failed to estimate depth for {img_key}: {e}")
                 continue
         
         return dense_depth_maps

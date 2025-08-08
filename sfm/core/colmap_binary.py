@@ -548,20 +548,39 @@ def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[s
         
         # Convert images dictionary from image_id keys to image_path keys for pipeline compatibility
         images_by_path = {}
+        logger.info(f"Converting {len(images)} images from ID-based to path-based keys")
+        logger.debug(f"Original images keys (sample): {list(images.keys())[:3]}")
+        logger.debug(f"Features keys (sample): {list(features.keys())[:3]}")
+        
+        conversion_success = 0
         for image_id, img_data in images.items():
-            image_name = img_data['name']
+            image_name = img_data.get('name', f'unknown_image_{image_id}')
+            
             # Find matching image path from original features (they should have matching basenames)
             matching_path = None
             for img_path in features.keys():
                 if Path(img_path).name == image_name:
                     matching_path = img_path
+                    conversion_success += 1
                     break
             
             # Use matching path if found, otherwise use name as fallback
             key = matching_path if matching_path else image_name
-            images_by_path[key] = img_data
+            
+            # Ensure all required fields exist
+            img_data_copy = img_data.copy()
+            if 'name' not in img_data_copy:
+                img_data_copy['name'] = image_name
+            
+            images_by_path[key] = img_data_copy
+            
+            if not matching_path:
+                logger.warning(f"Could not match image {image_name} to original feature path, using name as key")
         
-        logger.info(f"Converted {len(images)} images from ID-based to path-based keys")
+        logger.info(f"Successfully converted {conversion_success}/{len(images)} images to path-based keys")
+        if conversion_success < len(images):
+            logger.warning(f"Some images could not be matched to original paths")
+            
         return points3d, cameras, images_by_path
     else:
         logger.error("COLMAP reconstruction failed")

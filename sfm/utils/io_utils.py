@@ -70,9 +70,17 @@ def save_images_bin(filepath: Path, images: Dict):
         num_images = len(images)
         f.write(num_images.to_bytes(8, byteorder='little'))
         
-        for image_path, image in images.items():
-            # Write image ID (use hash of path as ID)
-            image_id = hash(image_path) % (2**31)  # 32-bit positive integer
+        for image_key, image in images.items():
+            # Handle both path-based and ID-based keys
+            if isinstance(image_key, (int, np.integer)):
+                # If key is numeric ID, use it directly and get name from image data
+                image_id = int(image_key)
+                image_path = image.get('name', f'image_{image_key}')
+            else:
+                # If key is a path, use hash as ID and extract name
+                image_path = str(image_key)
+                image_id = hash(image_path) % (2**31)  # 32-bit positive integer
+            
             f.write(image_id.to_bytes(4, byteorder='little'))
             
             # Write camera ID (convert to int if string, default to 1 if missing)
@@ -80,8 +88,12 @@ def save_images_bin(filepath: Path, images: Dict):
             camera_id_int = int(camera_id) if isinstance(camera_id, str) else int(camera_id)
             f.write(camera_id_int.to_bytes(4, byteorder='little'))
             
-            # Write image name
-            image_name = image['name'].encode('utf-8')
+            # Write image name 
+            if 'name' in image:
+                image_name = image['name'].encode('utf-8')
+            else:
+                # Fallback: use the basename of the image_path
+                image_name = Path(image_path).name.encode('utf-8')
             f.write(len(image_name).to_bytes(8, byteorder='little'))
             f.write(image_name)
             
