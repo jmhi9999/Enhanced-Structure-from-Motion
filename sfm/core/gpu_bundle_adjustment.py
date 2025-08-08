@@ -28,15 +28,16 @@ logger = logging.getLogger(__name__)
 class GPUBundleAdjustment:
     """GPU-accelerated bundle adjustment for enhanced speed"""
     
-    def __init__(self, device: torch.device):
+    def __init__(self, device: torch.device, max_iterations: int = 100, high_quality: bool = True):
         self.device = device
         self.use_gpu = torch.cuda.is_available()
         
         # Performance parameters
-        self.max_iterations = 100
-        self.gradient_tolerance = 1e-10
-        self.parameter_tolerance = 1e-8
-        self.function_tolerance = 1e-6
+        self.max_iterations = max_iterations
+        self.high_quality = high_quality
+        self.gradient_tolerance = 1e-12 if high_quality else 1e-10
+        self.parameter_tolerance = 1e-10 if high_quality else 1e-8
+        self.function_tolerance = 1e-8 if high_quality else 1e-6
         
         # Memory management
         self.memory_pool = cp.get_default_memory_pool() if self.use_gpu else None

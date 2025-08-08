@@ -337,9 +337,13 @@ def read_images_binary(path_to_model_file: Path) -> Dict[int, Dict]:
             
             # Read 2D points
             num_points2D = struct.unpack("<Q", fid.read(8))[0]
-            x_y_id_s = struct.unpack(f"<{num_points2D * 3}d", fid.read(24 * num_points2D))
-            xys = np.column_stack([np.array(x_y_id_s[0::3]), np.array(x_y_id_s[1::3])])
-            point3D_ids = np.array(x_y_id_s[2::3], dtype=np.int64)
+            if num_points2D > 0:
+                x_y_id_s = struct.unpack(f"<{num_points2D * 3}d", fid.read(24 * num_points2D))
+                xys = np.column_stack([np.array(x_y_id_s[0::3]), np.array(x_y_id_s[1::3])])
+                point3D_ids = np.array(x_y_id_s[2::3], dtype=np.int64)
+            else:
+                xys = np.array([]).reshape(0, 2)
+                point3D_ids = np.array([], dtype=np.int64)
             
             images[image_id] = {
                 'qvec': qvec,
@@ -364,11 +368,15 @@ def read_points3d_binary(path_to_model_file: Path) -> Dict[int, Dict]:
             rgb = np.array(binary_point_line_properties[4:7], dtype=np.int64)
             error = binary_point_line_properties[7]
             
-            # Read track
+            # Read track with overflow protection
             track_length = struct.unpack("<Q", fid.read(8))[0]
-            track_elems = struct.unpack(f"<{track_length * 2}i", fid.read(8 * track_length))
-            image_ids = np.array(track_elems[0::2], dtype=np.int64)
-            point2D_idxs = np.array(track_elems[1::2], dtype=np.int64)
+            if track_length > 0:
+                track_elems = struct.unpack(f"<{track_length * 2}i", fid.read(8 * track_length))
+                image_ids = np.array(track_elems[0::2], dtype=np.int64)
+                point2D_idxs = np.array(track_elems[1::2], dtype=np.int64)
+            else:
+                image_ids = np.array([], dtype=np.int64)
+                point2D_idxs = np.array([], dtype=np.int64)
             
             points3D[point3D_id] = {
                 'xyz': xyz,
