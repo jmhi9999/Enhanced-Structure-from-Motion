@@ -104,7 +104,11 @@ class DenseDepthEstimator:
         """Estimate dense depth map for a single image"""
         
         # Get camera parameters
-        camera_id = img_data['camera_id']
+        camera_id = img_data.get('camera_id')
+        if camera_id is None:
+            # If camera_id is missing, try to use the first available camera or default to 1
+            camera_id = next(iter(cameras.keys())) if cameras else 1
+            logger.warning(f"Missing camera_id for {img_path}, using camera_id={camera_id}")
         camera = cameras[camera_id]
         
         # Get image dimensions

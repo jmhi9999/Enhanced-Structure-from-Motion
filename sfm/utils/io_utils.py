@@ -75,8 +75,9 @@ def save_images_bin(filepath: Path, images: Dict):
             image_id = hash(image_path) % (2**31)  # 32-bit positive integer
             f.write(image_id.to_bytes(4, byteorder='little'))
             
-            # Write camera ID (convert to int if string)
-            camera_id_int = int(image['camera_id']) if isinstance(image['camera_id'], str) else int(image['camera_id'])
+            # Write camera ID (convert to int if string, default to 1 if missing)
+            camera_id = image.get('camera_id', 1)
+            camera_id_int = int(camera_id) if isinstance(camera_id, str) else int(camera_id)
             f.write(camera_id_int.to_bytes(4, byteorder='little'))
             
             # Write image name

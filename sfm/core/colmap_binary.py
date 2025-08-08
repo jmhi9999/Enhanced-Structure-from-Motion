@@ -544,7 +544,25 @@ def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[s
     
     if success:
         # Read results
-        return read_colmap_binary_results(output_path / "sparse")
+        points3d, cameras, images = read_colmap_binary_results(output_path / "sparse")
+        
+        # Convert images dictionary from image_id keys to image_path keys for pipeline compatibility
+        images_by_path = {}
+        for image_id, img_data in images.items():
+            image_name = img_data['name']
+            # Find matching image path from original features (they should have matching basenames)
+            matching_path = None
+            for img_path in features.keys():
+                if Path(img_path).name == image_name:
+                    matching_path = img_path
+                    break
+            
+            # Use matching path if found, otherwise use name as fallback
+            key = matching_path if matching_path else image_name
+            images_by_path[key] = img_data
+        
+        logger.info(f"Converted {len(images)} images from ID-based to path-based keys")
+        return points3d, cameras, images_by_path
     else:
         logger.error("COLMAP reconstruction failed")
         return {}, {}, {}
