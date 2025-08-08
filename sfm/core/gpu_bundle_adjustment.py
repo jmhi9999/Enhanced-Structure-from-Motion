@@ -1,20 +1,5 @@
 import torch
 import numpy as np
-
-# GPU dependencies - optional imports
-try:
-    import cupy as cp
-    CUPY_AVAILABLE = True
-except ImportError:
-    CUPY_AVAILABLE = False
-    cp = None
-
-try:
-    import pyceres
-    PYCERES_AVAILABLE = True
-except ImportError:
-    PYCERES_AVAILABLE = False
-    pyceres = None
 from typing import Dict, List, Tuple, Any, Optional
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +8,25 @@ from tqdm import tqdm
 import time
 
 logger = logging.getLogger(__name__)
+
+# GPU dependencies - optional imports
+try:
+    import cupy as cp
+    # Test if CuPy is properly installed by trying to create a simple array
+    test_array = cp.array([1.0])
+    CUPY_AVAILABLE = True
+    logger.debug("CuPy is available and functional")
+except (ImportError, AttributeError, RuntimeError, Exception) as e:
+    CUPY_AVAILABLE = False
+    cp = None
+    logger.debug(f"CuPy not available or not functional: {e}")
+
+try:
+    import pyceres
+    PYCERES_AVAILABLE = True
+except ImportError:
+    PYCERES_AVAILABLE = False
+    pyceres = None
 
 
 class GPUBundleAdjustment:
@@ -105,59 +109,76 @@ class GPUBundleAdjustment:
         """Prepare data in GPU-friendly format with memory pooling"""
         logger.info("Preparing GPU data structures...")
         
-        # Use memory pool for efficient allocation
-        with cp.cuda.MemoryPool() as mempool:
-            gpu_data = {
-                'camera_params': [],
-                'image_params': [],
-                'point_params': [],
-                'observations': [],
-                'camera_indices': [],
-                'point_indices': [],
-                'intrinsics': []
+        # Initialize GPU data structure
+        gpu_data = {
+            'camera_params': [],
+            'image_params': [],
+            'point_params': [],
+            'observations': [],
+            'camera_indices': [],
+            'point_indices': [],
+            'intrinsics': []
+        }
+        
+        # Use memory pool for efficient allocation if available
+        use_mempool = (CUPY_AVAILABLE and hasattr(cp, 'cuda') and 
+                      hasattr(cp.cuda, 'MemoryPool'))
+        
+        if use_mempool:
+            try:
+                with cp.cuda.MemoryPool() as mempool:
+                    return self._prepare_gpu_data_inner(cameras, images, points3d, matches, gpu_data)
+            except Exception as e:
+                logger.debug(f"Memory pool failed, using regular allocation: {e}")
+                return self._prepare_gpu_data_inner(cameras, images, points3d, matches, gpu_data)
+        else:
+            return self._prepare_gpu_data_inner(cameras, images, points3d, matches, gpu_data)
+    
+    def _prepare_gpu_data_inner(self, cameras: Dict, images: Dict, points3d: Dict,
+                               matches: Dict, gpu_data: Dict) -> Dict:
+        """Inner GPU data preparation logic"""
+        
+        # Process cameras (parallel)
+        camera_list = list(cameras.items())
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            camera_futures = {
+                executor.submit(self._process_camera, cam_id, cam_data): cam_id 
+                for cam_id, cam_data in camera_list
             }
             
-            # Process cameras (parallel)
-            camera_list = list(cameras.items())
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                camera_futures = {
-                    executor.submit(self._process_camera, cam_id, cam_data): cam_id 
-                    for cam_id, cam_data in camera_list
-                }
-                
-                for future in as_completed(camera_futures):
-                    cam_id = camera_futures[future]
-                    intrinsics = future.result()
-                    gpu_data['intrinsics'].append(intrinsics)
+            for future in as_completed(camera_futures):
+                cam_id = camera_futures[future]
+                intrinsics = future.result()
+                gpu_data['intrinsics'].append(intrinsics)
+        
+        # Process images (poses) in parallel
+        image_list = list(images.items())
+        pose_params = []
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            pose_futures = {
+                executor.submit(self._process_image_pose, img_data): img_path
+                for img_path, img_data in image_list
+            }
             
-            # Process images (poses) in parallel
-            image_list = list(images.items())
-            pose_params = []
-            
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                pose_futures = {
-                    executor.submit(self._process_image_pose, img_data): img_path
-                    for img_path, img_data in image_list
-                }
-                
-                for future in as_completed(pose_futures):
-                    pose_param = future.result()
-                    pose_params.append(pose_param)
-            
-            # Convert to GPU arrays
-            if self.use_gpu:
-                gpu_data['image_params'] = cp.asarray(pose_params, dtype=cp.float64)
-                gpu_data['point_params'] = cp.asarray(
-                    [pt['xyz'] for pt in points3d.values()], dtype=cp.float64
-                )
-            else:
-                gpu_data['image_params'] = np.array(pose_params, dtype=np.float64)
-                gpu_data['point_params'] = np.array(
-                    [pt['xyz'] for pt in points3d.values()], dtype=np.float64
-                )
-            
-            # Build observation matrix efficiently
-            self._build_observation_matrix(gpu_data, images, points3d)
+            for future in as_completed(pose_futures):
+                pose_param = future.result()
+                pose_params.append(pose_param)
+        
+        # Convert to GPU arrays
+        if self.use_gpu and CUPY_AVAILABLE:
+            gpu_data['image_params'] = cp.array(pose_params, dtype=cp.float64)
+            gpu_data['point_params'] = cp.array(
+                [pt['xyz'] for pt in points3d.values()], dtype=cp.float64
+            )
+        else:
+            gpu_data['image_params'] = np.array(pose_params, dtype=np.float64)
+            gpu_data['point_params'] = np.array(
+                [pt['xyz'] for pt in points3d.values()], dtype=np.float64
+            )
+        
+        # Build observation matrix efficiently
+        self._build_observation_matrix(gpu_data, images, points3d)
         
         return gpu_data
     
@@ -196,10 +217,10 @@ class GPUBundleAdjustment:
                     point_indices.append(point_idx)
         
         # Convert to GPU arrays for fast access
-        if self.use_gpu:
-            gpu_data['observations'] = cp.asarray(observations, dtype=cp.float64)
-            gpu_data['camera_indices'] = cp.asarray(camera_indices, dtype=cp.int32)
-            gpu_data['point_indices'] = cp.asarray(point_indices, dtype=cp.int32)
+        if self.use_gpu and CUPY_AVAILABLE:
+            gpu_data['observations'] = cp.array(observations, dtype=cp.float64)
+            gpu_data['camera_indices'] = cp.array(camera_indices, dtype=cp.int32)
+            gpu_data['point_indices'] = cp.array(point_indices, dtype=cp.int32)
         else:
             gpu_data['observations'] = np.array(observations, dtype=np.float64)
             gpu_data['camera_indices'] = np.array(camera_indices, dtype=np.int32)
@@ -284,9 +305,17 @@ class GPUBundleAdjustment:
         """Extract optimized results from GPU data"""
         
         # Convert GPU arrays back to CPU if needed
-        if self.use_gpu:
-            optimized_poses = cp.asnumpy(gpu_data['image_params'])
-            optimized_points = cp.asnumpy(gpu_data['point_params'])
+        if self.use_gpu and CUPY_AVAILABLE:
+            # Convert CuPy arrays back to NumPy
+            if hasattr(gpu_data['image_params'], 'get'):
+                optimized_poses = gpu_data['image_params'].get()  # CuPy to NumPy conversion
+            else:
+                optimized_poses = gpu_data['image_params']
+                
+            if hasattr(gpu_data['point_params'], 'get'):
+                optimized_points = gpu_data['point_params'].get()  # CuPy to NumPy conversion  
+            else:
+                optimized_points = gpu_data['point_params']
         else:
             optimized_poses = gpu_data['image_params']
             optimized_points = gpu_data['point_params']
