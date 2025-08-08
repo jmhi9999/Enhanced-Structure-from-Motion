@@ -86,11 +86,11 @@ class GPUBundleAdjustment:
         
         # Run optimization
         summary = pyceres.SolverSummary()
-        pyceres.Solve(options, problem, summary)
+        pyceres.solve(options, problem, summary)
         
         optimization_time = time.time() - start_time
         logger.info(f"Bundle adjustment completed in {optimization_time:.2f}s")
-        logger.info(f"Iterations: {summary.iterations.size()}")
+        logger.info(f"Successful steps: {summary.num_successful_steps}")
         logger.info(f"Final cost: {summary.final_cost:.6f}")
         
         # Convert results back
@@ -230,15 +230,31 @@ class GPUBundleAdjustment:
         """Setup Ceres optimization problem with GPU data"""
         problem = pyceres.Problem()
         
-        # Add parameter blocks
+        # Add parameter blocks and store references
         num_cameras = len(gpu_data['image_params'])
         num_points = len(gpu_data['point_params'])
         
+        # Store parameter block references for later use in residuals
+        gpu_data['camera_param_blocks'] = []
+        gpu_data['point_param_blocks'] = []
+        
         for i in range(num_cameras):
-            problem.AddParameterBlock(gpu_data['image_params'][i], 7)  # quat + trans
+            # Convert to numpy if it's a CuPy array and ensure contiguous memory
+            cam_params = gpu_data['image_params'][i]
+            if hasattr(cam_params, 'get'):
+                cam_params = cam_params.get()  # CuPy to NumPy
+            cam_params = np.ascontiguousarray(cam_params, dtype=np.float64)
+            problem.add_parameter_block(cam_params, 7)  # quat + trans
+            gpu_data['camera_param_blocks'].append(cam_params)
         
         for i in range(num_points):
-            problem.AddParameterBlock(gpu_data['point_params'][i], 3)  # 3D point
+            # Convert to numpy if it's a CuPy array and ensure contiguous memory
+            point_params = gpu_data['point_params'][i]
+            if hasattr(point_params, 'get'):
+                point_params = point_params.get()  # CuPy to NumPy
+            point_params = np.ascontiguousarray(point_params, dtype=np.float64)
+            problem.add_parameter_block(point_params, 3)  # 3D point
+            gpu_data['point_param_blocks'].append(point_params)
         
         # Add residual blocks with GPU-accelerated cost function
         self._add_residual_blocks(problem, gpu_data)
@@ -247,12 +263,6 @@ class GPUBundleAdjustment:
     
     def _add_residual_blocks(self, problem: pyceres.Problem, gpu_data: Dict):
         """Add residual blocks using GPU-accelerated computation"""
-        
-        # Create custom cost function for GPU acceleration
-        cost_function = GPUReprojectionError(
-            gpu_data['observations'],
-            gpu_data['intrinsics'][0] if gpu_data['intrinsics'] else None
-        )
         
         # Add residuals in batches for better performance
         batch_size = 1000
@@ -265,11 +275,17 @@ class GPUBundleAdjustment:
                 camera_idx = gpu_data['camera_indices'][i]
                 point_idx = gpu_data['point_indices'][i]
                 
-                problem.AddResidualBlock(
+                # Create individual cost function for each observation
+                cost_function = GPUReprojectionError(
+                    gpu_data['observations'][i],  # Individual observation
+                    gpu_data['intrinsics'][0] if gpu_data['intrinsics'] else None
+                )
+                
+                problem.add_residual_block(
                     cost_function,
                     pyceres.HuberLoss(1.0),  # Robust loss function
-                    [gpu_data['image_params'][camera_idx], 
-                     gpu_data['point_params'][point_idx]]
+                    [gpu_data['camera_param_blocks'][camera_idx], 
+                     gpu_data['point_param_blocks'][point_idx]]
                 )
     
     def _get_fast_solver_options(self) -> pyceres.SolverOptions:
@@ -277,12 +293,11 @@ class GPUBundleAdjustment:
         options = pyceres.SolverOptions()
         
         # Use sparse Cholesky for large problems
-        options.linear_solver_type = pyceres.SPARSE_SCHUR
-        options.preconditioner_type = pyceres.SCHUR_JACOBI
+        options.linear_solver_type = pyceres.LinearSolverType.SPARSE_SCHUR
+        options.preconditioner_type = pyceres.PreconditionerType.SCHUR_JACOBI
         
         # Threading
         options.num_threads = self.max_workers
-        options.num_linear_solver_threads = self.max_workers
         
         # Convergence criteria for speed
         options.max_num_iterations = self.max_iterations
@@ -292,7 +307,7 @@ class GPUBundleAdjustment:
         
         # Minimize logging for speed
         options.minimizer_progress_to_stdout = False
-        options.logging_type = pyceres.SILENT
+        options.logging_type = pyceres.LoggingType.SILENT
         
         # Use GPU if available
         if self.use_gpu:
