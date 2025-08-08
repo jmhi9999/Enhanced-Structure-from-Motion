@@ -13,6 +13,10 @@ from pathlib import Path
 import requests
 from PIL import Image
 import torchvision.transforms as transforms
+import logging
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 # Import transformers for depth estimation - completely optional
 try:
@@ -28,8 +32,10 @@ except (ImportError, TypeError, AttributeError) as e:
 class DenseDepthEstimator:
     """Dense depth estimation from sparse SfM points with monocular depth models"""
     
-    def __init__(self, device: torch.device):
+    def __init__(self, device: torch.device, depth_model: str = 'dpt-large', high_quality: bool = True):
         self.device = device
+        self.depth_model_name = depth_model
+        self.high_quality = high_quality
         self.depth_model = None
         self.feature_extractor = None
         
@@ -44,7 +50,7 @@ class DenseDepthEstimator:
         
         try:
             # Load DPT model for depth estimation
-            model_name = "Intel/dpt-large"
+            model_name = "Intel/dpt-large" if self.depth_model_name == 'dpt-large' else "Intel/dpt-hybrid-midas"
             logger.info(f"Loading DPT model: {model_name}")
             
             self.feature_extractor = DPTFeatureExtractor.from_pretrained(model_name)

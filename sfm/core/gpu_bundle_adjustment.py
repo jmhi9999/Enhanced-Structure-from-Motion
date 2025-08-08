@@ -1,8 +1,3 @@
-"""
-GPU-accelerated Bundle Adjustment using PyCeres and CuPy
-Designed to be faster than hloc's bundle adjustment
-"""
-
 import torch
 import numpy as np
 

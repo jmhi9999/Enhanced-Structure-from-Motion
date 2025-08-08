@@ -1,9 +1,3 @@
-"""
-GPU-accelerated brute force feature matcher
-Keeps all features as tensors in GPU memory for maximum performance
-Replaces vocabulary tree approach with direct tensor operations
-"""
-
 import torch
 import numpy as np
 from typing import Dict, List, Tuple, Any, Optional

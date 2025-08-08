@@ -84,7 +84,7 @@ def parse_args():
     # Quality settings for 3DGS
     parser.add_argument("--high_quality", action="store_true",
                        help="Enable high-quality mode for 3DGS")
-    parser.add_argument("--scale_recovery", action="store_true",
+    parser.add_argument("--scale_recovery", action="store_true", default=True,
                        help="Enable scale recovery for consistent scene scale")
     
     # Profiling
@@ -167,7 +167,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     setup_logging(str(output_path))
     
     logger.info("=" * 60)
-    logger.info("Enhanced SfM Pipeline for 3D Gaussian Splatting")
+    logger.info("Enhanced SfM Pipeline")
     logger.info("=" * 60)
     logger.info(f"Input directory: {input_dir}")
     logger.info(f"Output directory: {output_dir}")

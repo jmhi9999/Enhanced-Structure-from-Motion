@@ -86,7 +86,7 @@ def filter_matches_with_magsac(features: Dict[str, Any], matches: Dict[Tuple[str
             logger.debug(f"Match {Path(img1_path).name} - {Path(img2_path).name}: {len(valid_matches0)} -> {len(filtered_matches0)} matches")
             
         except Exception as e:
-            logger.warning(f"MAGSAC filtering failed for {Path(img1_path).name} - {Path(img2_path).name}: {e}")
+            #logger.debug(f"MAGSAC filtering failed for {Path(img1_path).name} - {Path(img2_path).name}: {e}")
             continue
     
     logger.info(f"MAGSAC filtering: {len(matches)} -> {len(filtered_matches)} pairs")
@@ -259,9 +259,6 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -
     
     sparse_path = output_path / "sparse"
     sparse_path.mkdir(exist_ok=True)
-    
-    # Skip COLMAP geometric verification since we already did MAGSAC filtering
-    logger.info("Skipping COLMAP geometric verification (already done with cv2 MAGSAC)")
     
     # Step 2: Incremental mapping (hloc-style minimal options)
     logger.info("Running COLMAP incremental mapping...")
