@@ -206,27 +206,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     # Try to load existing features from both H5 and tensor formats
     features = None
     
-    if features_file.exists() and features_tensor_file.exists():
-        try:
-            # Load existing features and validate
-            from sfm.utils.io_utils import load_features
-            existing_features = load_features(features_file)
-            existing_tensors = torch.load(features_tensor_file, map_location=device)
-            
-            if len(existing_features) == len(processed_images):
-                logger.info(f"Found existing features for {len(existing_features)} images, skipping extraction")
-                features = existing_features
-                # Also store tensor data for later use
-                features_tensors = existing_tensors
-                stage_times['feature_extraction'] = 0.0
-            else:
-                logger.info(f"Feature count mismatch: {len(existing_features)} vs {len(processed_images)}, re-extracting")
-                raise ValueError("Feature count mismatch")
-        except Exception as e:
-            logger.info(f"Could not load existing features ({e}), trying tensor file only")
-            features = None
-    
-    # Fallback: try to load only from tensor file if H5 failed
     if features is None and features_tensor_file.exists():
         try:
             existing_tensors = torch.load(features_tensor_file, map_location=device)

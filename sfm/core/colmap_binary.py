@@ -321,6 +321,12 @@ def read_images_binary(path_to_model_file: Path) -> Dict[int, Dict]:
     images = {}
     with open(path_to_model_file, "rb") as fid:
         num_reg_images = struct.unpack("<Q", fid.read(8))[0]
+        
+        # Add bounds checking to prevent overflow
+        if num_reg_images > 100000:  # Reasonable upper limit
+            logger.warning(f"Unusually large number of registered images: {num_reg_images}, truncating to 100000")
+            num_reg_images = 100000
+        
         for _ in range(num_reg_images):
             binary_image_properties = struct.unpack("<iidddddi", fid.read(64))
             image_id = binary_image_properties[0]
@@ -335,12 +341,27 @@ def read_images_binary(path_to_model_file: Path) -> Dict[int, Dict]:
                 image_name += current_char.decode("utf-8")
                 current_char = struct.unpack("<c", fid.read(1))[0]
             
-            # Read 2D points
+            # Read 2D points with overflow protection
             num_points2D = struct.unpack("<Q", fid.read(8))[0]
+            
+            # Add bounds checking to prevent overflow
+            if num_points2D > 1000000:  # Reasonable upper limit
+                logger.warning(f"Unusually large number of 2D points ({num_points2D}) for image {image_name}, truncating to 1000000")
+                num_points2D = 1000000
+            
             if num_points2D > 0:
-                x_y_id_s = struct.unpack(f"<{num_points2D * 3}d", fid.read(24 * num_points2D))
-                xys = np.column_stack([np.array(x_y_id_s[0::3]), np.array(x_y_id_s[1::3])])
-                point3D_ids = np.array(x_y_id_s[2::3], dtype=np.int64)
+                try:
+                    # Use int64 to prevent overflow in struct calculations
+                    total_elements = int(num_points2D) * 3
+                    total_bytes = int(num_points2D) * 24
+                    
+                    x_y_id_s = struct.unpack(f"<{total_elements}d", fid.read(total_bytes))
+                    xys = np.column_stack([np.array(x_y_id_s[0::3]), np.array(x_y_id_s[1::3])])
+                    point3D_ids = np.array(x_y_id_s[2::3], dtype=np.int64)
+                except (struct.error, OverflowError, MemoryError) as e:
+                    logger.warning(f"Error reading 2D points for image {image_name}: {e}, skipping")
+                    xys = np.array([]).reshape(0, 2)
+                    point3D_ids = np.array([], dtype=np.int64)
             else:
                 xys = np.array([]).reshape(0, 2)
                 point3D_ids = np.array([], dtype=np.int64)
@@ -361,6 +382,12 @@ def read_points3d_binary(path_to_model_file: Path) -> Dict[int, Dict]:
     points3D = {}
     with open(path_to_model_file, "rb") as fid:
         num_points = struct.unpack("<Q", fid.read(8))[0]
+        
+        # Add bounds checking to prevent overflow
+        if num_points > 10000000:  # Reasonable upper limit
+            logger.warning(f"Unusually large number of 3D points: {num_points}, truncating to 10000000")
+            num_points = 10000000
+        
         for _ in range(num_points):
             binary_point_line_properties = struct.unpack("<QdddBBBd", fid.read(43))
             point3D_id = binary_point_line_properties[0]
@@ -370,10 +397,25 @@ def read_points3d_binary(path_to_model_file: Path) -> Dict[int, Dict]:
             
             # Read track with overflow protection
             track_length = struct.unpack("<Q", fid.read(8))[0]
+            
+            # Add bounds checking to prevent overflow
+            if track_length > 100000:  # Reasonable upper limit for track length
+                logger.warning(f"Unusually large track length ({track_length}) for point {point3D_id}, truncating to 100000")
+                track_length = 100000
+            
             if track_length > 0:
-                track_elems = struct.unpack(f"<{track_length * 2}i", fid.read(8 * track_length))
-                image_ids = np.array(track_elems[0::2], dtype=np.int64)
-                point2D_idxs = np.array(track_elems[1::2], dtype=np.int64)
+                try:
+                    # Use int64 to prevent overflow in struct calculations
+                    total_elements = int(track_length) * 2
+                    total_bytes = int(track_length) * 8
+                    
+                    track_elems = struct.unpack(f"<{total_elements}i", fid.read(total_bytes))
+                    image_ids = np.array(track_elems[0::2], dtype=np.int64)
+                    point2D_idxs = np.array(track_elems[1::2], dtype=np.int64)
+                except (struct.error, OverflowError, MemoryError) as e:
+                    logger.warning(f"Error reading track for point {point3D_id}: {e}, skipping")
+                    image_ids = np.array([], dtype=np.int64)
+                    point2D_idxs = np.array([], dtype=np.int64)
             else:
                 image_ids = np.array([], dtype=np.int64)
                 point2D_idxs = np.array([], dtype=np.int64)
@@ -417,17 +459,34 @@ def read_colmap_binary_results(sparse_path: Path) -> Tuple[Dict, Dict, Dict]:
         logger.info(f"  - images.bin: {images_size} bytes") 
         logger.info(f"  - points3D.bin: {points_size} bytes")
         
-        # Read actual COLMAP binary files
+        # Read actual COLMAP binary files with comprehensive error handling
         try:
             cameras = read_cameras_binary(cameras_file)
+            logger.debug(f"Successfully read {len(cameras)} cameras")
+        except Exception as e:
+            logger.warning(f"Error reading cameras.bin: {e}")
+            cameras = {}
+            
+        try:
             images = read_images_binary(images_file)
+            logger.debug(f"Successfully read {len(images)} images")
+        except Exception as e:
+            logger.warning(f"Error reading images.bin: {e}")
+            images = {}
+            
+        try:
             points3d = read_points3d_binary(points_file)
-            
-            # Log comprehensive reconstruction statistics like hloc
-            num_cameras = len(cameras)
-            num_images = len(images)
-            num_points = len(points3d)
-            
+            logger.debug(f"Successfully read {len(points3d)} points")
+        except Exception as e:
+            logger.warning(f"Error reading points3D.bin: {e}")
+            points3d = {}
+        
+        # Log comprehensive reconstruction statistics like hloc
+        num_cameras = len(cameras)
+        num_images = len(images)
+        num_points = len(points3d)
+        
+        if num_cameras > 0 or num_images > 0 or num_points > 0:
             # Calculate statistics
             registered_images = sum(1 for img_data in images.values() if len(img_data.get('point3D_ids', [])) > 0)
             observations = sum(len(point_data.get('track', [])) for point_data in points3d.values())
@@ -450,15 +509,10 @@ def read_colmap_binary_results(sparse_path: Path) -> Tuple[Dict, Dict, Dict]:
             logger.info(f"Mean observations per image: {mean_observations_per_image:.2f}")
             logger.info(f"Mean reprojection error: {mean_reprojection_error:.4f} px")
             logger.info("=" * 50)
-            
-            return points3d, cameras, images
-            
-        except Exception as e:
-            logger.error(f"Error reading COLMAP binary files: {e}")
-            logger.info("Falling back to empty dictionaries")
-            
-            # Return empty dictionaries with proper structure
-            return {}, {}, {}
+        else:
+            logger.warning("No reconstruction data could be read from binary files")
+        
+        return points3d, cameras, images
     else:
         logger.error("COLMAP reconstruction files not found")
         missing = []

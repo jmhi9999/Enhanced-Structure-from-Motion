@@ -39,9 +39,19 @@ class GPUBundleAdjustment:
         self.parameter_tolerance = 1e-10 if high_quality else 1e-8
         self.function_tolerance = 1e-8 if high_quality else 1e-6
         
-        # Memory management
-        self.memory_pool = cp.get_default_memory_pool() if self.use_gpu else None
-        self.pinned_memory_pool = cp.get_default_pinned_memory_pool() if self.use_gpu else None
+        # Memory management with version compatibility
+        self.memory_pool = None
+        self.pinned_memory_pool = None
+        
+        if self.use_gpu and CUPY_AVAILABLE:
+            try:
+                # Try to get memory pools (available in newer CuPy versions)
+                if hasattr(cp, 'get_default_memory_pool'):
+                    self.memory_pool = cp.get_default_memory_pool()
+                if hasattr(cp, 'get_default_pinned_memory_pool'):
+                    self.pinned_memory_pool = cp.get_default_pinned_memory_pool()
+            except AttributeError:
+                logger.debug("CuPy memory pools not available in this version")
         
         # Threading for CPU operations
         self.max_workers = min(psutil.cpu_count(), 8)
