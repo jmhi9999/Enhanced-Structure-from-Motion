@@ -194,13 +194,28 @@ def save_dense_depth_maps(output_dir: Path, depth_maps: Dict[str, np.ndarray]):
 
 def save_reconstruction_info(filepath: Path, cameras: Dict, images: Dict, points3d: Dict):
     """Save reconstruction information in JSON format"""
+    
+    def convert_to_json_serializable(obj):
+        """Convert numpy arrays to lists for JSON serialization"""
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: convert_to_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_to_json_serializable(item) for item in obj]
+        elif isinstance(obj, (np.integer, np.int64)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float64)):
+            return float(obj)
+        return obj
+    
     info = {
         'num_cameras': len(cameras),
         'num_images': len(images),
         'num_points3d': len(points3d),
-        'cameras': cameras,
-        'images': {str(k): v for k, v in images.items()},
-        'points3d': points3d
+        'cameras': convert_to_json_serializable(cameras),
+        'images': {str(k): convert_to_json_serializable(v) for k, v in images.items()},
+        'points3d': convert_to_json_serializable(points3d)
     }
     
     with open(filepath, 'w') as f:

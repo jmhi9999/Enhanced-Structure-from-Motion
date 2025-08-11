@@ -119,7 +119,9 @@ class DenseDepthEstimator:
                 camera_id = next(iter(cameras.keys()))
                 logger.warning(f"Missing or invalid camera_id for {img_path}, using camera_id={camera_id}")
             else:
-                raise ValueError(f"No cameras available and missing camera_id for {img_path}")
+                # Skip depth estimation for images without cameras (not registered in COLMAP)
+                logger.warning(f"No cameras available and missing camera_id for {img_path}, skipping depth estimation")
+                return np.zeros((480, 640))  # Return dummy depth map
         camera = cameras[camera_id]
         
         # Get image dimensions
