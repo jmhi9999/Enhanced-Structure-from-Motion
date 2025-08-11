@@ -252,7 +252,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         else:
             logger.info("Running semantic segmentation model...")
             segmenter = SemanticSegmenter(
-                model_name=kwargs.get('semantic_model', 'nvidia/segformer-b5-finetuned-ade-512-512'),
+                model_name=kwargs.get('semantic_model', 'nvidia/segformer-b0-finetuned-ade-512-512'),
                 device=device
             )
             semantic_masks = segmenter.segment_images_batch(
