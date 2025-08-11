@@ -5,3 +5,4 @@ CLAUDE.md
 /sfm/utils/__pycache__
 /sfm/__pycache__
 /__pycache__
+.claude/settings.local.json

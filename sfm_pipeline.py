@@ -87,6 +87,14 @@ def parse_args():
     parser.add_argument("--scale_recovery", action="store_true", default=True,
                        help="Enable scale recovery for consistent scene scale")
     
+    # Dense Point Cloud Generation
+    parser.add_argument("--generate_dense_pointcloud", action="store_true", default=True,
+                       help="Generate dense point cloud from depth maps for 3DGS")
+    parser.add_argument("--pointcloud_subsample", type=int, default=None,
+                       help="Subsample factor for point cloud generation (auto-adjusted based on dataset size)")
+    parser.add_argument("--max_pointcloud_images", type=int, default=None,
+                       help="Maximum number of images to use for point cloud generation (default: all images)")
+    
     # Profiling
     parser.add_argument("--profile", action="store_true",
                        help="Enable performance profiling")
@@ -451,6 +459,37 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         
         stage_times['dense_depth'] = time.time() - stage_start
         logger.info(f"Dense depth estimation completed in {stage_times['dense_depth']:.2f}s")
+        
+        # Stage 8.5: Generate dense point cloud from depth maps
+        if kwargs.get('generate_dense_pointcloud', True):
+            logger.info("Stage 8.5: Generating dense point cloud...")
+            stage_start = time.time()
+            
+            try:
+                from generate_dense_pointcloud import simple_depth_to_pointcloud_integrated
+                
+                # Generate dense point cloud
+                pointcloud_path = output_path / "dense_pointcloud_3dgs.ply"
+                num_points = simple_depth_to_pointcloud_integrated(
+                    depth_maps_dir=depth_dir,
+                    output_path=pointcloud_path,
+                    subsample=kwargs.get('pointcloud_subsample', 6),
+                    max_images=kwargs.get('max_pointcloud_images', None)
+                )
+                
+                if num_points > 0:
+                    logger.info(f"Generated dense point cloud with {num_points:,} points")
+                    logger.info(f"Point cloud saved to: {pointcloud_path}")
+                else:
+                    logger.warning("Failed to generate dense point cloud")
+                    
+            except ImportError as e:
+                logger.warning(f"Dense point cloud generation not available: {e}")
+            except Exception as e:
+                logger.error(f"Error generating dense point cloud: {e}")
+            
+            stage_times['dense_pointcloud'] = time.time() - stage_start
+            logger.info(f"Dense point cloud generation completed in {stage_times['dense_pointcloud']:.2f}s")
     
     # Stage 9: Scale recovery (for 3DGS consistency)
     if kwargs.get('scale_recovery', False):

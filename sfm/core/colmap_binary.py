@@ -424,14 +424,15 @@ def read_images_binary(path_to_model_file: Path) -> Dict[int, Dict]:
                 
             logger.info(f"Reading {num_reg_images} images from binary file")
             
-            for _ in range(num_reg_images):
+            for i in range(num_reg_images):
                 try:
                     # Record current position for potential backtracking
                     current_pos = fid.tell()
                     
-                    # Check available bytes
-                    remaining_bytes = len(fid.read())
-                    fid.seek(current_pos)
+                    # Check available bytes more efficiently
+                    end_pos = fid.seek(0, 2)  # Seek to end
+                    fid.seek(current_pos)  # Return to current position
+                    remaining_bytes = end_pos - current_pos
                     
                     if remaining_bytes < 64:
                         logger.warning(f"Insufficient bytes remaining ({remaining_bytes}) for image header, skipping")
@@ -488,10 +489,12 @@ def read_images_binary(path_to_model_file: Path) -> Dict[int, Dict]:
                             continue
                     
                     if not image_properties_parsed:
-                        logger.warning(f"Could not parse image properties with any known format, skipping image")
+                        logger.debug(f"Could not parse image properties with any known format, skipping image at position {current_pos}")
                         # Try to skip to next image by reading past this entry
                         try:
-                            fid.seek(current_pos + 64)  # Skip ahead
+                            # Skip ahead with boundary checking
+                            next_pos = min(current_pos + 64, end_pos)
+                            fid.seek(next_pos)
                         except:
                             break
                         continue
