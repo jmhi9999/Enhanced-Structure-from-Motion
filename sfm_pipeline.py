@@ -208,7 +208,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     
     if features is None and features_tensor_file.exists():
         try:
-            existing_tensors = torch.load(features_tensor_file, map_location=device)
+            existing_tensors = torch.load(features_tensor_file, map_location=device, weights_only=True)
             if len(existing_tensors) == len(processed_images):
                 logger.info(f"Found existing tensor features for {len(existing_tensors)} images, using those")
                 # Convert tensor format to expected format
@@ -318,7 +318,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             # Load existing matches and validate
             from sfm.utils.io_utils import load_matches
             existing_matches = load_matches(matches_file)
-            existing_match_tensors = torch.load(matches_tensor_file, map_location=device)
+            existing_match_tensors = torch.load(matches_tensor_file, map_location=device, weights_only=True)
             
             # Check if we have reasonable number of matches
             if len(existing_matches) >= expected_pairs * 0.1:  # At least 10% success rate

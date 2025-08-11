@@ -113,10 +113,13 @@ class DenseDepthEstimator:
         
         # Get camera parameters
         camera_id = img_data.get('camera_id')
-        if camera_id is None:
-            # If camera_id is missing, try to use the first available camera or default to 1
-            camera_id = next(iter(cameras.keys())) if cameras else 1
-            logger.warning(f"Missing camera_id for {img_path}, using camera_id={camera_id}")
+        if camera_id is None or camera_id not in cameras:
+            # If camera_id is missing or invalid, use the first available camera
+            if cameras:
+                camera_id = next(iter(cameras.keys()))
+                logger.warning(f"Missing or invalid camera_id for {img_path}, using camera_id={camera_id}")
+            else:
+                raise ValueError(f"No cameras available and missing camera_id for {img_path}")
         camera = cameras[camera_id]
         
         # Get image dimensions

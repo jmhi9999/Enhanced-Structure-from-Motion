@@ -571,6 +571,9 @@ def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[s
             img_data_copy = img_data.copy()
             if 'name' not in img_data_copy:
                 img_data_copy['name'] = image_name
+            # Ensure camera_id is preserved from COLMAP results
+            if 'camera_id' not in img_data_copy and 'camera_id' in img_data:
+                img_data_copy['camera_id'] = img_data['camera_id']
             
             images_by_path[key] = img_data_copy
             
