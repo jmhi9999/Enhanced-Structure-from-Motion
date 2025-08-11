@@ -115,12 +115,15 @@ class SemanticRobustPoints:
         # Step 1: Generate semantic masks for all images
         image_paths = []
         valid_images = {}
+        image_name_to_path = {}  # Map image names to full paths
         
         for img_path, img_data in images.items():
-            full_path = image_dir / img_data.get('name', Path(img_path).name)
+            image_name = img_data.get('name', Path(img_path).name)
+            full_path = image_dir / image_name
             if full_path.exists():
                 image_paths.append(str(full_path))
                 valid_images[str(full_path)] = img_data
+                image_name_to_path[image_name] = str(full_path)
         
         logger.info(f"Generating semantic masks for {len(image_paths)} images...")
         semantic_masks = self.segmenter.segment_images_batch(image_paths, batch_size=4)
@@ -145,12 +148,22 @@ class SemanticRobustPoints:
                 observation_count = 0
                 
                 for img_id, point2d_idx in track[:10]:  # Limit to 10 observations for efficiency
-                    # Find corresponding image
+                    # Find corresponding image using image_id mapping
                     matching_img_path = None
+                    
+                    # Try to find image by ID first
                     for img_path, img_data in valid_images.items():
-                        if img_data.get('name', '').split('.')[0] in img_path or str(img_id) in img_path:
+                        if img_data.get('id') == img_id:
                             matching_img_path = img_path
                             break
+                    
+                    # Fallback: try to find by name matching
+                    if not matching_img_path:
+                        for img_path, img_data in valid_images.items():
+                            image_name = img_data.get('name', '')
+                            if image_name and (str(img_id) in image_name or image_name.split('.')[0] == str(img_id)):
+                                matching_img_path = img_path
+                                break
                     
                     if not matching_img_path or matching_img_path not in semantic_masks:
                         continue

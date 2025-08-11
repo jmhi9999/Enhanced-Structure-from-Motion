@@ -15,6 +15,7 @@ from typing import Dict, List, Any
 import torch
 import numpy as np
 from tqdm import tqdm
+from PIL import Image
 
 # Import our enhanced SfM components
 from sfm.core.feature_extractor import FeatureExtractorFactory
@@ -611,31 +612,30 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
                 source_sparse_dir = original_sparse_dir
                 logger.info("Using original sparse reconstruction for 3DGS")
             else:
-                logger.warning("No sparse reconstruction found - cannot copy files for 3DGS")
+                logger.warning("No sparse reconstruction found - skipping 3DGS file preparation")
                 stage_times['3dgs_preparation'] = 0
-                return {}
             
-            # Copy all COLMAP files (cameras.bin, images.bin, points3D.bin)
-            for filename in ['cameras.bin', 'images.bin', 'points3D.bin']:
-                src_file = source_sparse_dir / filename
-                if src_file.exists():
-                    shutil.copy2(src_file, gs_sparse_dir / filename)
-                    logger.info(f"Copied {filename} to 3DGS directory")
-                else:
-                    logger.warning(f"File {filename} not found in source sparse directory")
-            
-            # Copy images directory if it exists
-            input_image_dir = Path(input_dir)
-            gs_images_dir = gs_input_path / "images"
-            if input_image_dir.exists():
-                if gs_images_dir.exists():
-                    import shutil
-                    shutil.rmtree(gs_images_dir)
-                shutil.copytree(input_image_dir, gs_images_dir)
-                logger.info(f"Copied {len(list(gs_images_dir.iterdir()))} images to 3DGS directory")
-            
-            logger.info(f"✅ 3DGS files ready at: {gs_sparse_dir}")
-            logger.info(f"   - Use with: python train.py -s {gs_input_path}")
+            # Copy all COLMAP files (cameras.bin, images.bin, points3D.bin) if we have a source
+            if 'source_sparse_dir' in locals():
+                for filename in ['cameras.bin', 'images.bin', 'points3D.bin']:
+                    src_file = source_sparse_dir / filename
+                    if src_file.exists():
+                        shutil.copy2(src_file, gs_sparse_dir / filename)
+                        logger.info(f"Copied {filename} to 3DGS directory")
+                    else:
+                        logger.warning(f"File {filename} not found in source sparse directory")
+                
+                # Copy images directory if it exists
+                input_image_dir = Path(input_dir)
+                gs_images_dir = gs_input_path / "images"
+                if input_image_dir.exists():
+                    if gs_images_dir.exists():
+                        shutil.rmtree(gs_images_dir)
+                    shutil.copytree(input_image_dir, gs_images_dir)
+                    logger.info(f"Copied {len(list(gs_images_dir.iterdir()))} images to 3DGS directory")
+                
+                logger.info(f"✅ 3DGS files ready at: {gs_sparse_dir}")
+                logger.info(f"   - Use with: python train.py -s {gs_input_path}")
             
         except Exception as e:
             logger.warning(f"Failed to prepare files for 3DGS: {e}")
