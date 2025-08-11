@@ -356,7 +356,12 @@ class DenseDepthEstimator:
         
         for img_path, depth_map in depth_maps.items():
             # Normalize depth map for visualization
-            depth_normalized = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min() + 1e-8)
+            min_depth, max_depth = depth_map.min(), depth_map.max()
+            if max_depth > min_depth:
+                depth_normalized = (depth_map - min_depth) / (max_depth - min_depth + 1e-8)
+            else:
+                depth_normalized = np.zeros_like(depth_map)
+            
             depth_uint8 = (depth_normalized * 255).astype(np.uint8)
             
             # Save as image
