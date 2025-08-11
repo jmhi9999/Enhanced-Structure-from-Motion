@@ -414,7 +414,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             high_quality=kwargs.get('high_quality', True)
         )
         
-        optimized_points, optimized_cameras, optimized_images = gpu_ba.optimize(
+        optimized_cameras, optimized_images, optimized_points = gpu_ba.optimize(
             cameras, images, sparse_points, verified_matches
         )
         
