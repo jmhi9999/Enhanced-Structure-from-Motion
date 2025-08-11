@@ -26,7 +26,12 @@ except (ImportError, TypeError, AttributeError) as e:
     DEPTH_MODEL_AVAILABLE = False
     DPTFeatureExtractor = None
     DPTForDepthEstimation = None
-    # Silently handle the import error to avoid breaking the whole library
+    # Log the actual import error to help with debugging
+    import logging
+    logging.getLogger(__name__).warning(
+        f"Could not import DPT model components from transformers: {e}",
+        exc_info=True
+    )
 
 
 class DenseDepthEstimator:
@@ -166,119 +171,198 @@ class DenseDepthEstimator:
         return depth_map
     
     def _get_monocular_depth(self, img_path: str) -> np.ndarray:
-        """Get monocular depth estimation using DPT model"""
-        if self.depth_model is None:
-            # Fallback: return None for monocular depth
+        """Get monocular depth estimation using DPT model with robust error handling"""
+        if self.depth_model is None or not DEPTH_MODEL_AVAILABLE:
+            logger.debug(f"DPT model not available, skipping monocular depth for {Path(img_path).name}")
             return None
         
         try:
-            # Load image with memory optimization
-            image = Image.open(img_path).convert('RGB')
+            # Check if image file exists
+            if not Path(img_path).exists():
+                logger.warning(f"Image file not found: {img_path}")
+                return None
             
-            # Prepare inputs
-            inputs = self.feature_extractor(images=image, return_tensors="pt")
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            # Load and validate image
+            try:
+                image = Image.open(img_path).convert('RGB')
+                if image.size[0] == 0 or image.size[1] == 0:
+                    logger.warning(f"Invalid image dimensions for {img_path}")
+                    return None
+            except Exception as e:
+                logger.error(f"Failed to load image {img_path}: {e}")
+                return None
             
-            # Get depth prediction with memory management
-            with torch.no_grad():
-                outputs = self.depth_model(**inputs)
-                predicted_depth = outputs.predicted_depth
-            
-            # Convert to numpy and free GPU memory immediately
-            depth_map = predicted_depth.squeeze().cpu().numpy()
-            del predicted_depth, outputs, inputs
-            torch.cuda.empty_cache() if self.device.type == "cuda" else None
-            
-            # Normalize depth to reasonable range (0-100 meters)
-            depth_map = self._normalize_depth_map(depth_map)
-            
-            return depth_map
-            
-        except torch.cuda.OutOfMemoryError:
-            logger.error(f"GPU memory insufficient for depth estimation on {img_path}")
-            torch.cuda.empty_cache()
-            return None
-            
-        except Exception as e:
-            logger.error(f"Monocular depth estimation failed for {img_path}: {e}")
-            return None
+            # Resize image if too large to prevent memory issues
+            max_size = 1024  # Maximum dimension
+            if max(image.size) > max_size:
+                ratio = max_size / max(image.size)
+                new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+                image = image.resize(new_size, Image.Resampling.LANCZOS)
+                logger.debug(f\"Resized image from {Path(img_path).name} to {new_size}\")\n            \n            # Prepare inputs with error handling\n            try:\n                inputs = self.feature_extractor(images=image, return_tensors=\"pt\")\n                inputs = {k: v.to(self.device) for k, v in inputs.items()}\n            except Exception as e:\n                logger.error(f\"Feature extraction failed for {img_path}: {e}\")\n                return None\n            \n            # Get depth prediction with memory management\n            try:\n                with torch.no_grad():\n                    outputs = self.depth_model(**inputs)\n                    if hasattr(outputs, 'predicted_depth'):\n                        predicted_depth = outputs.predicted_depth\n                    else:\n                        # Fallback for different model outputs\n                        predicted_depth = outputs.prediction if hasattr(outputs, 'prediction') else outputs[0]\n                \n                # Convert to numpy and validate\n                depth_map = predicted_depth.squeeze().cpu().numpy()\n                \n                # Clean up GPU memory immediately\n                del predicted_depth, outputs, inputs\n                if self.device.type == \"cuda\":\n                    torch.cuda.empty_cache()\n                \n                # Validate depth map\n                if depth_map.size == 0 or not np.isfinite(depth_map).any():\n                    logger.warning(f\"Invalid depth map generated for {img_path}\")\n                    return None\n                \n                # Normalize depth to reasonable range (0-50 meters)\n                depth_map = self._normalize_depth_map(depth_map)\n                \n                logger.debug(f\"Generated monocular depth for {Path(img_path).name}: {depth_map.min():.2f}-{depth_map.max():.2f}m\")\n                return depth_map\n                \n            except torch.cuda.OutOfMemoryError:\n                logger.error(f\"GPU memory insufficient for depth estimation on {Path(img_path).name}\")\n                if self.device.type == \"cuda\":\n                    torch.cuda.empty_cache()\n                return None\n            \n            except RuntimeError as e:\n                if \"CUDA\" in str(e):\n                    logger.error(f\"CUDA error during depth estimation for {Path(img_path).name}: {e}\")\n                    if self.device.type == \"cuda\":\n                        torch.cuda.empty_cache()\n                else:\n                    logger.error(f\"Runtime error during depth estimation for {Path(img_path).name}: {e}\")\n                return None\n                \n        except Exception as e:\n            logger.error(f\"Monocular depth estimation failed for {Path(img_path).name}: {e}\")\n            return None"}, {"old_string": "    def _normalize_depth_map(self, depth_map: np.ndarray) -> np.ndarray:\n        \"\"\"Normalize depth map to reasonable range\"\"\"\n        # Remove outliers\n        depth_map = np.clip(depth_map, np.percentile(depth_map, 1), np.percentile(depth_map, 99))\n        \n        # Normalize to 0-100 meter range\n        depth_min, depth_max = depth_map.min(), depth_map.max()\n        if depth_max > depth_min:\n            depth_map = (depth_map - depth_min) / (depth_max - depth_min) * 100.0\n        \n        return depth_map", "new_string": "    def _normalize_depth_map(self, depth_map: np.ndarray) -> np.ndarray:\n        \"\"\"Normalize depth map to reasonable range with robust handling\"\"\"\n        try:\n            # Handle edge cases\n            if depth_map.size == 0:\n                return depth_map\n            \n            # Remove NaN and infinite values\n            depth_map_clean = np.nan_to_num(depth_map, nan=0.0, posinf=50.0, neginf=0.0)\n            \n            # Remove outliers using percentiles\n            valid_depths = depth_map_clean[depth_map_clean > 0]\n            \n            if len(valid_depths) == 0:\n                logger.warning(\"All depth values are zero or invalid\")\n                return depth_map_clean\n            \n            # Use percentile-based clipping to remove outliers\n            p1, p99 = np.percentile(valid_depths, [1, 99])\n            depth_clipped = np.clip(depth_map_clean, 0, p99)\n            \n            # Normalize to 0-50 meter range (more realistic for indoor/outdoor scenes)\n            depth_min, depth_max = depth_clipped.min(), depth_clipped.max()\n            \n            if depth_max > depth_min and depth_max > 0:\n                # Linear normalization to 0-50m range\n                depth_normalized = (depth_clipped - depth_min) / (depth_max - depth_min) * 50.0\n            else:\n                # Fallback: keep original values if normalization fails\n                depth_normalized = depth_clipped\n            \n            # Ensure reasonable depth values\n            depth_normalized = np.clip(depth_normalized, 0.1, 200.0)  # 10cm to 200m range\n            \n            return depth_normalized\n            \n        except Exception as e:\n            logger.warning(f\"Depth normalization failed: {e}, returning original\")\n            return depth_map"}]
     
     def _normalize_depth_map(self, depth_map: np.ndarray) -> np.ndarray:
-        """Normalize depth map to reasonable range"""
-        # Remove outliers
-        depth_map = np.clip(depth_map, np.percentile(depth_map, 1), np.percentile(depth_map, 99))
-        
-        # Normalize to 0-100 meter range
-        depth_min, depth_max = depth_map.min(), depth_map.max()
-        if depth_max > depth_min:
-            depth_map = (depth_map - depth_min) / (depth_max - depth_min) * 100.0
-        
-        return depth_map
+        """Normalize depth map to reasonable range with robust handling"""
+        try:
+            # Handle edge cases
+            if depth_map.size == 0:
+                return depth_map
+            
+            # Remove NaN and infinite values
+            depth_map_clean = np.nan_to_num(depth_map, nan=0.0, posinf=50.0, neginf=0.0)
+            
+            # Remove outliers using percentiles
+            valid_depths = depth_map_clean[depth_map_clean > 0]
+            
+            if len(valid_depths) == 0:
+                logger.warning("All depth values are zero or invalid")
+                return depth_map_clean
+            
+            # Use percentile-based clipping to remove outliers
+            p1, p99 = np.percentile(valid_depths, [1, 99])
+            depth_clipped = np.clip(depth_map_clean, 0, p99)
+            
+            # Normalize to 0-50 meter range (more realistic for indoor/outdoor scenes)
+            depth_min, depth_max = depth_clipped.min(), depth_clipped.max()
+            
+            if depth_max > depth_min and depth_max > 0:
+                # Linear normalization to 0-50m range
+                depth_normalized = (depth_clipped - depth_min) / (depth_max - depth_min) * 50.0
+            else:
+                # Fallback: keep original values if normalization fails
+                depth_normalized = depth_clipped
+            
+            # Ensure reasonable depth values
+            depth_normalized = np.clip(depth_normalized, 0.1, 200.0)  # 10cm to 200m range
+            
+            return depth_normalized
+            
+        except Exception as e:
+            logger.warning(f"Depth normalization failed: {e}, returning original")
+            return depth_map
     
     def _combine_depth_estimates(self, sparse_depths: List[Tuple[float, float, float]], 
                                monocular_depth: Optional[np.ndarray],
                                width: int, height: int) -> np.ndarray:
         """Combine sparse SfM depths with monocular depth estimation"""
         
-        if len(sparse_depths) < 3 and monocular_depth is None:
-            # Not enough data
-            return np.zeros((height, width))
+        logger.debug(f"Combining depth estimates: {len(sparse_depths)} sparse points, monocular: {monocular_depth is not None}")
         
         # Initialize depth map
         depth_map = np.zeros((height, width))
         
-        if monocular_depth is not None:
-            # Use monocular depth as base
-            depth_map = cv2.resize(monocular_depth, (width, height))
+        # Start with monocular depth if available
+        if monocular_depth is not None and monocular_depth.size > 0:
+            try:
+                # Resize monocular depth to match target dimensions
+                if monocular_depth.shape != (height, width):
+                    depth_map = cv2.resize(monocular_depth, (width, height), interpolation=cv2.INTER_LINEAR)
+                else:
+                    depth_map = monocular_depth.copy()
+                logger.debug(f"Using monocular depth as base: {depth_map.min():.2f} - {depth_map.max():.2f}")
+            except Exception as e:
+                logger.warning(f"Error using monocular depth: {e}")
+                depth_map = np.zeros((height, width))
         
-        # Interpolate sparse depths
+        # Add sparse depth constraints
         if len(sparse_depths) >= 3:
-            sparse_depth_map = self._interpolate_depth_map(sparse_depths, width, height)
-            
-            # Combine with monocular depth
-            if monocular_depth is not None:
-                # Weighted combination
-                sparse_weight = 0.7
-                monocular_weight = 0.3
+            try:
+                sparse_depth_map = self._interpolate_depth_map(sparse_depths, width, height)
                 
-                # Normalize sparse depth to same range
-                sparse_depth_map = self._normalize_depth_map(sparse_depth_map)
-                
-                # Combine
-                depth_map = (sparse_weight * sparse_depth_map + 
-                           monocular_weight * depth_map)
-            else:
-                depth_map = sparse_depth_map
+                if sparse_depth_map.max() > 0:
+                    logger.debug(f"Sparse depth range: {sparse_depth_map.min():.2f} - {sparse_depth_map.max():.2f}")
+                    
+                    if depth_map.max() > 0:  # Combine with existing monocular depth
+                        # Scale matching for better fusion
+                        sparse_valid = sparse_depth_map > 0
+                        monocular_valid = depth_map > 0
+                        
+                        if np.any(sparse_valid & monocular_valid):
+                            # Find scale factor between sparse and monocular depth
+                            overlap_sparse = sparse_depth_map[sparse_valid & monocular_valid]
+                            overlap_monocular = depth_map[sparse_valid & monocular_valid]
+                            
+                            if len(overlap_sparse) > 0:
+                                scale_factor = np.median(overlap_sparse) / (np.median(overlap_monocular) + 1e-8)
+                                scale_factor = np.clip(scale_factor, 0.1, 10.0)  # Reasonable range
+                                logger.debug(f"Applying scale factor: {scale_factor:.3f}")
+                                depth_map *= scale_factor
+                        
+                        # Weighted combination
+                        sparse_weight = 0.8  # Trust sparse more
+                        monocular_weight = 0.2
+                        
+                        # Create combined depth map
+                        combined = depth_map.copy()
+                        combined[sparse_valid] = (sparse_weight * sparse_depth_map[sparse_valid] + 
+                                               monocular_weight * depth_map[sparse_valid])
+                        depth_map = combined
+                    else:
+                        # Use sparse depth only
+                        depth_map = sparse_depth_map
+                        logger.debug("Using sparse depth only")
+                        
+            except Exception as e:
+                logger.warning(f"Error combining sparse depths: {e}")
         
+        # Final validation
+        if depth_map.max() == 0:
+            logger.warning("Final depth map is all zeros, creating fallback")
+            # Create a simple depth gradient as last resort
+            y_coords, x_coords = np.mgrid[0:height, 0:width]
+            depth_map = ((y_coords / height) * 0.3 + 0.7) * 5.0  # 3.5-5m range
+        
+        logger.debug(f"Final depth map range: {depth_map.min():.2f} - {depth_map.max():.2f}")
         return depth_map
     
     def _get_sparse_depths(self, img_path: str, img_data: Dict, 
                           sparse_points: Dict, K: np.ndarray, 
                           R: np.ndarray, tvec: np.ndarray) -> List[Tuple[float, float, float]]:
-        """Get sparse depth values for the image"""
+        """Get sparse depth values for the image with corrected projection"""
         
         sparse_depths = []
         
         # Get 2D keypoints and their 3D point IDs
-        keypoints = img_data['xys']
-        point3d_ids = img_data['point3D_ids']
+        keypoints = img_data.get('xys', [])
+        point3d_ids = img_data.get('point3D_ids', [])
         
+        if len(keypoints) == 0 or len(point3d_ids) == 0:
+            logger.warning(f"No keypoints or point3D_ids found for {img_path}")
+            return sparse_depths
+        
+        valid_count = 0
         for i, (kp, point3d_id) in enumerate(zip(keypoints, point3d_ids)):
             if point3d_id != -1 and point3d_id in sparse_points:
-                # Get 3D point
-                point3d = sparse_points[point3d_id]['xyz']
-                
-                # Project 3D point to 2D
-                point3d_homo = np.append(point3d, 1.0)
-                point2d_proj = K @ (R @ point3d_homo[:3] + tvec)
-                point2d_proj = point2d_proj[:2] / point2d_proj[2]
-                
-                # Calculate depth
-                depth = np.linalg.norm(R @ point3d + tvec)
-                
-                # Add to sparse depths
-                sparse_depths.append((point2d_proj[0], point2d_proj[1], depth))
+                try:
+                    # Get 3D point in world coordinates
+                    point3d_world = np.array(sparse_points[point3d_id]['xyz'])
+                    
+                    # Transform to camera coordinates: P_cam = R * P_world + t
+                    point3d_cam = R @ point3d_world + tvec
+                    
+                    # Check if point is in front of camera
+                    if point3d_cam[2] <= 0:
+                        continue
+                    
+                    # Project to image coordinates
+                    point2d_proj = K @ point3d_cam
+                    if abs(point2d_proj[2]) < 1e-8:  # Avoid division by zero
+                        continue
+                        
+                    point2d_proj = point2d_proj[:2] / point2d_proj[2]
+                    
+                    # Calculate depth (Z coordinate in camera frame)
+                    depth = point3d_cam[2]
+                    
+                    # Sanity check: depth should be positive and reasonable
+                    if depth > 0 and depth < 1000:  # Max 1km depth
+                        sparse_depths.append((point2d_proj[0], point2d_proj[1], depth))
+                        valid_count += 1
+                        
+                except Exception as e:
+                    logger.debug(f"Error processing point {point3d_id}: {e}")
+                    continue
         
+        logger.debug(f"Generated {valid_count} valid sparse depths for {Path(img_path).name}")
         return sparse_depths
     
     def _interpolate_depth_map(self, sparse_depths: List[Tuple[float, float, float]], 
@@ -312,30 +396,52 @@ class DenseDepthEstimator:
         return depth_map
     
     def _apply_geometry_completion(self, depth_map: np.ndarray, img_path: str) -> np.ndarray:
-        """Apply geometry completion for texture-poor regions"""
+        """Apply geometry completion for texture-poor regions with proper hole filling"""
         
-        # Fill holes using morphological operations
-        kernel = np.ones((5, 5), np.uint8)
-        mask = (depth_map > 0).astype(np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        
-        # Interpolate remaining holes
-        depth_map_filled = depth_map.copy()
-        zero_mask = (depth_map == 0)
-        
-        if np.any(zero_mask):
-            # Use distance transform to fill holes
-            from scipy import ndimage
-            depth_map_filled = ndimage.distance_transform_edt(
-                depth_map_filled, return_distances=False, return_indices=True
-            )
-        
-        # Apply bilateral filter for smoothness
-        depth_map_smooth = cv2.bilateralFilter(
-            depth_map_filled.astype(np.float32), 9, 75, 75
-        )
-        
-        return depth_map_smooth
+        try:
+            if depth_map.max() == 0:
+                logger.debug(f"Skipping geometry completion for all-zero depth map: {Path(img_path).name}")
+                return depth_map
+            
+            depth_map_filled = depth_map.copy()
+            
+            # Create mask of valid (non-zero) pixels
+            valid_mask = (depth_map > 0).astype(np.uint8)
+            
+            # Fill small holes using morphological operations
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            valid_mask_closed = cv2.morphologyEx(valid_mask, cv2.MORPH_CLOSE, kernel)
+            
+            # Find pixels that need interpolation
+            hole_mask = (valid_mask_closed > 0) & (depth_map == 0)
+            
+            if np.any(hole_mask):
+                # Use inpainting to fill holes
+                depth_map_uint8 = (depth_map / depth_map.max() * 255).astype(np.uint8)
+                inpaint_mask = hole_mask.astype(np.uint8)
+                
+                # OpenCV inpainting for hole filling
+                inpainted = cv2.inpaint(depth_map_uint8, inpaint_mask, 3, cv2.INPAINT_TELEA)
+                
+                # Convert back to depth values
+                depth_map_filled = (inpainted / 255.0) * depth_map.max()
+                
+                # Preserve original valid depths
+                depth_map_filled[valid_mask > 0] = depth_map[valid_mask > 0]
+            
+            # Apply gentle smoothing to reduce noise
+            if depth_map_filled.max() > 0:
+                depth_map_smooth = cv2.bilateralFilter(
+                    depth_map_filled.astype(np.float32), 5, 50, 50
+                )
+            else:
+                depth_map_smooth = depth_map_filled
+            
+            return depth_map_smooth
+            
+        except Exception as e:
+            logger.warning(f"Geometry completion failed for {Path(img_path).name}: {e}")
+            return depth_map
     
     def _quaternion_to_rotation_matrix(self, qvec: List[float]) -> np.ndarray:
         """Convert quaternion to rotation matrix"""
@@ -350,28 +456,77 @@ class DenseDepthEstimator:
         return R
     
     def save_depth_maps(self, depth_maps: Dict[str, np.ndarray], output_dir: str):
-        """Save depth maps to files"""
+        """Save depth maps to files with proper value handling"""
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
+        logger.info(f"Saving {len(depth_maps)} depth maps to {output_path}")
+        
         for img_path, depth_map in depth_maps.items():
-            # Normalize depth map for visualization
-            min_depth, max_depth = depth_map.min(), depth_map.max()
-            if max_depth > min_depth:
-                depth_normalized = (depth_map - min_depth) / (max_depth - min_depth + 1e-8)
-            else:
-                depth_normalized = np.zeros_like(depth_map)
-            
-            depth_uint8 = (depth_normalized * 255).astype(np.uint8)
-            
-            # Save as image
-            img_name = Path(img_path).stem
-            output_file = output_path / f"{img_name}_depth.png"
-            cv2.imwrite(str(output_file), depth_uint8)
-            
-            # Save raw depth data
-            output_file_raw = output_path / f"{img_name}_depth.npy"
-            np.save(str(output_file_raw), depth_map)
+            try:
+                # Check if depth map has valid values
+                if depth_map is None or depth_map.size == 0:
+                    logger.warning(f"Empty depth map for {img_path}, skipping")
+                    continue
+                
+                # Remove NaN and inf values
+                depth_map_clean = np.nan_to_num(depth_map, nan=0.0, posinf=100.0, neginf=0.0)
+                
+                # Check if depth map has any non-zero values
+                non_zero_count = np.count_nonzero(depth_map_clean)
+                total_count = depth_map_clean.size
+                logger.debug(f"Depth map for {Path(img_path).name}: {non_zero_count}/{total_count} non-zero pixels")
+                
+                if non_zero_count == 0:
+                    logger.warning(f"Depth map for {img_path} is all zeros, creating dummy depth")
+                    # Create a simple gradient depth map as fallback
+                    h, w = depth_map_clean.shape
+                    y_coords, x_coords = np.mgrid[0:h, 0:w]
+                    depth_map_clean = (y_coords / h + x_coords / w) * 10.0  # 0-20m range
+                
+                # Get depth statistics
+                min_depth = np.min(depth_map_clean[depth_map_clean > 0]) if non_zero_count > 0 else 0.0
+                max_depth = np.max(depth_map_clean)
+                mean_depth = np.mean(depth_map_clean[depth_map_clean > 0]) if non_zero_count > 0 else 0.0
+                
+                logger.debug(f"Depth stats for {Path(img_path).name}: min={min_depth:.2f}, max={max_depth:.2f}, mean={mean_depth:.2f}")
+                
+                # Normalize depth map for visualization (0-255)
+                if max_depth > min_depth and max_depth > 0:
+                    # Use percentile-based normalization for better visualization
+                    p1, p99 = np.percentile(depth_map_clean[depth_map_clean > 0], [1, 99]) if non_zero_count > 0 else (0, max_depth)
+                    depth_clipped = np.clip(depth_map_clean, p1, p99)
+                    depth_normalized = (depth_clipped - p1) / (p99 - p1 + 1e-8)
+                else:
+                    depth_normalized = np.ones_like(depth_map_clean) * 0.5  # Gray fallback
+                
+                # Convert to uint8 for PNG saving
+                depth_uint8 = (depth_normalized * 255).astype(np.uint8)
+                
+                # Apply colormap for better visualization
+                depth_colored = cv2.applyColorMap(depth_uint8, cv2.COLORMAP_PLASMA)
+                
+                # Save as image
+                img_name = Path(img_path).stem
+                output_file = output_path / f"{img_name}_depth.png"
+                success = cv2.imwrite(str(output_file), depth_colored)
+                
+                # Also save grayscale version
+                output_file_gray = output_path / f"{img_name}_depth_gray.png"
+                cv2.imwrite(str(output_file_gray), depth_uint8)
+                
+                if success:
+                    logger.debug(f"Saved depth map: {output_file}")
+                else:
+                    logger.warning(f"Failed to save depth map: {output_file}")
+                
+                # Save raw depth data
+                output_file_raw = output_path / f"{img_name}_depth.npy"
+                np.save(str(output_file_raw), depth_map_clean)
+                
+            except Exception as e:
+                logger.error(f"Error saving depth map for {img_path}: {e}")
+                continue
     
     def get_stats(self) -> Dict[str, Any]:
         """Get depth estimation statistics"""

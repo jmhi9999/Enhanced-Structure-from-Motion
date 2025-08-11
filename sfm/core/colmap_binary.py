@@ -313,16 +313,42 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -
 
 
 def read_cameras_binary(path_to_model_file: Path) -> Dict[int, Dict]:
-    """Read cameras.bin file"""
+    """Read cameras.bin file with robust error handling"""
     cameras = {}
+    
+    if not path_to_model_file.exists():
+        logger.error(f"Camera binary file not found: {path_to_model_file}")
+        return cameras
+        
+    # Check file size
+    file_size = path_to_model_file.stat().st_size
+    if file_size < 8:
+        logger.error(f"Camera binary file too small ({file_size} bytes)")
+        return cameras
+    
     try:
         with open(path_to_model_file, "rb") as fid:
-            num_cameras = struct.unpack("<Q", fid.read(8))[0]
+            # Read number of cameras with error handling
+            try:
+                num_cameras_data = fid.read(8)
+                if len(num_cameras_data) < 8:
+                    logger.error(f"Could not read camera count header")
+                    return cameras
+                num_cameras = struct.unpack("<Q", num_cameras_data)[0]
+            except struct.error as e:
+                logger.error(f"Error reading camera count: {e}")
+                return cameras
             
             # Bounds check
             if num_cameras > 10000:
                 logger.warning(f"Unusually large number of cameras: {num_cameras}, truncating to 10000")
                 num_cameras = 10000
+                
+            if num_cameras == 0:
+                logger.warning("No cameras found in binary file")
+                return cameras
+                
+            logger.info(f"Reading {num_cameras} cameras from binary file")
             
             for _ in range(num_cameras):
                 # Read camera properties with proper error handling
@@ -361,38 +387,118 @@ def read_cameras_binary(path_to_model_file: Path) -> Dict[int, Dict]:
 
 
 def read_images_binary(path_to_model_file: Path) -> Dict[int, Dict]:
-    """Read images.bin file"""
+    """Read images.bin file with robust error handling"""
     images = {}
+    
+    if not path_to_model_file.exists():
+        logger.error(f"Images binary file not found: {path_to_model_file}")
+        return images
+        
+    # Check file size
+    file_size = path_to_model_file.stat().st_size
+    if file_size < 8:
+        logger.error(f"Images binary file too small ({file_size} bytes)")
+        return images
+    
     try:
         with open(path_to_model_file, "rb") as fid:
-            num_reg_images = struct.unpack("<Q", fid.read(8))[0]
+            # Read number of images with error handling
+            try:
+                num_reg_images_data = fid.read(8)
+                if len(num_reg_images_data) < 8:
+                    logger.error(f"Could not read image count header")
+                    return images
+                num_reg_images = struct.unpack("<Q", num_reg_images_data)[0]
+            except struct.error as e:
+                logger.error(f"Error reading image count: {e}")
+                return images
             
             # Add bounds checking to prevent overflow
             if num_reg_images > 100000:  # Reasonable upper limit
                 logger.warning(f"Unusually large number of registered images: {num_reg_images}, truncating to 100000")
                 num_reg_images = 100000
             
+            if num_reg_images == 0:
+                logger.warning("No registered images found in binary file")
+                return images
+                
+            logger.info(f"Reading {num_reg_images} images from binary file")
+            
             for _ in range(num_reg_images):
                 try:
-                    # Try COLMAP standard 64-byte format first
-                    binary_image_properties = struct.unpack("<iidddddi", fid.read(64))
-                    image_id = binary_image_properties[0]
-                    qvec = np.array(binary_image_properties[1:5])
-                    tvec = np.array(binary_image_properties[5:8])
-                    camera_id = binary_image_properties[8]
-                except struct.error:
-                    # Fallback: try alternative formats
-                    try:
-                        # Go back and try 56-byte format
-                        fid.seek(fid.tell() - 64)
-                        binary_image_properties = struct.unpack("<Idddddi", fid.read(56))
-                        image_id = binary_image_properties[0]
-                        qvec = np.array(binary_image_properties[1:5])
-                        tvec = np.array(binary_image_properties[5:8])
-                        camera_id = binary_image_properties[8]
-                    except struct.error as e:
-                        logger.warning(f"Error reading image properties: {e}, skipping image")
+                    # Record current position for potential backtracking
+                    current_pos = fid.tell()
+                    
+                    # Check available bytes
+                    remaining_bytes = len(fid.read())
+                    fid.seek(current_pos)
+                    
+                    if remaining_bytes < 64:
+                        logger.warning(f"Insufficient bytes remaining ({remaining_bytes}) for image header, skipping")
+                        break
+                    
+                    # Try multiple COLMAP format variations
+                    format_attempts = [
+                        ("<iidddddi", 64),    # Standard: int, int, 4*double, int (64 bytes)
+                        ("<Idddddi", 56),     # Alternative: uint, 4*double, int (56 bytes) 
+                        ("<iidddd", 48),      # Minimal: int, int, 4*double (48 bytes)
+                        ("<Idddd", 40),       # Minimal alt: uint, 4*double (40 bytes)
+                        ("<iiddddi", 60),     # Variant: int, int, 4*double, int (60 bytes)
+                    ]
+                    
+                    image_properties_parsed = False
+                    
+                    for format_str, expected_bytes in format_attempts:
+                        try:
+                            fid.seek(current_pos)  # Reset position
+                            if remaining_bytes < expected_bytes:
+                                continue
+                                
+                            binary_image_properties = struct.unpack(format_str, fid.read(expected_bytes))
+                            
+                            # Parse based on format
+                            if format_str.startswith("<ii"):  # Formats starting with two ints
+                                image_id = binary_image_properties[0]
+                                # Skip second int (might be padding)
+                                qvec = np.array(binary_image_properties[2:6]) if len(binary_image_properties) >= 6 else np.array(binary_image_properties[1:5])
+                                tvec = np.array(binary_image_properties[6:9]) if len(binary_image_properties) >= 9 else np.array(binary_image_properties[5:8])
+                                camera_id = binary_image_properties[-1] if len(binary_image_properties) > 8 else 1
+                            elif format_str.startswith("<I"):  # Formats starting with uint
+                                image_id = binary_image_properties[0]
+                                qvec = np.array(binary_image_properties[1:5])
+                                tvec = np.array(binary_image_properties[5:8]) if len(binary_image_properties) >= 8 else np.array([0.0, 0.0, 0.0])
+                                camera_id = binary_image_properties[-1] if len(binary_image_properties) > 7 else 1
+                            else:
+                                continue
+                            
+                            # Validate quaternion (should be normalized)
+                            qvec_norm = np.linalg.norm(qvec)
+                            if qvec_norm < 1e-8 or qvec_norm > 2.0:  # Reasonable bounds
+                                continue
+                                
+                            # Validate image_id
+                            if image_id <= 0 or image_id > 1000000:
+                                continue
+                            
+                            image_properties_parsed = True
+                            logger.debug(f"Successfully parsed image {image_id} with format {format_str}")
+                            break
+                            
+                        except (struct.error, IndexError, ValueError):
+                            continue
+                    
+                    if not image_properties_parsed:
+                        logger.warning(f"Could not parse image properties with any known format, skipping image")
+                        # Try to skip to next image by reading past this entry
+                        try:
+                            fid.seek(current_pos + 64)  # Skip ahead
+                        except:
+                            break
                         continue
+                        
+                except Exception as e:
+                    logger.warning(f"Unexpected error reading image: {e}, skipping")
+                    continue
                 
                 try:
                     # Read image name
@@ -448,54 +554,107 @@ def read_images_binary(path_to_model_file: Path) -> Dict[int, Dict]:
 
 
 def read_points3d_binary(path_to_model_file: Path) -> Dict[int, Dict]:
-    """Read points3D.bin file"""
+    """Read points3D.bin file with robust error handling"""
     points3D = {}
-    with open(path_to_model_file, "rb") as fid:
-        num_points = struct.unpack("<Q", fid.read(8))[0]
+    
+    if not path_to_model_file.exists():
+        logger.error(f"Points3D binary file not found: {path_to_model_file}")
+        return points3D
         
-        # Add bounds checking to prevent overflow
-        if num_points > 10000000:  # Reasonable upper limit
-            logger.warning(f"Unusually large number of 3D points: {num_points}, truncating to 10000000")
-            num_points = 10000000
-        
-        for _ in range(num_points):
-            binary_point_line_properties = struct.unpack("<QdddBBBd", fid.read(43))
-            point3D_id = binary_point_line_properties[0]
-            xyz = np.array(binary_point_line_properties[1:4])
-            rgb = np.array(binary_point_line_properties[4:7], dtype=np.int64)
-            error = binary_point_line_properties[7]
-            
-            # Read track with overflow protection
-            track_length = struct.unpack("<Q", fid.read(8))[0]
+    # Check file size
+    file_size = path_to_model_file.stat().st_size
+    if file_size < 8:
+        logger.error(f"Points3D binary file too small ({file_size} bytes)")
+        return points3D
+    
+    try:
+        with open(path_to_model_file, "rb") as fid:
+            # Read number of points with error handling
+            try:
+                num_points_data = fid.read(8)
+                if len(num_points_data) < 8:
+                    logger.error(f"Could not read points count header")
+                    return points3D
+                num_points = struct.unpack("<Q", num_points_data)[0]
+            except struct.error as e:
+                logger.error(f"Error reading points count: {e}")
+                return points3D
             
             # Add bounds checking to prevent overflow
-            if track_length > 100000:  # Reasonable upper limit for track length
-                logger.warning(f"Unusually large track length ({track_length}) for point {point3D_id}, truncating to 100000")
-                track_length = 100000
+            if num_points > 10000000:  # Reasonable upper limit
+                logger.warning(f"Unusually large number of 3D points: {num_points}, truncating to 10000000")
+                num_points = 10000000
+                
+            if num_points == 0:
+                logger.warning("No 3D points found in binary file")
+                return points3D
+                
+            logger.info(f"Reading {num_points} 3D points from binary file")
             
-            if track_length > 0:
+            for _ in range(num_points):
                 try:
-                    # Use int64 to prevent overflow in struct calculations
-                    total_elements = int(track_length) * 2
-                    total_bytes = int(track_length) * 8
+                    # Read point properties
+                    point_data = fid.read(43)
+                    if len(point_data) < 43:
+                        logger.warning(f"Insufficient data for 3D point, skipping")
+                        break
+                        
+                    binary_point_line_properties = struct.unpack("<QdddBBBd", point_data)
+                    point3D_id = binary_point_line_properties[0]
+                    xyz = np.array(binary_point_line_properties[1:4])
+                    rgb = np.array(binary_point_line_properties[4:7], dtype=np.int64)
+                    error = binary_point_line_properties[7]
                     
-                    track_elems = struct.unpack(f"<{total_elements}i", fid.read(total_bytes))
-                    image_ids = np.array(track_elems[0::2], dtype=np.int64)
-                    point2D_idxs = np.array(track_elems[1::2], dtype=np.int64)
-                except (struct.error, OverflowError, MemoryError) as e:
-                    logger.warning(f"Error reading track for point {point3D_id}: {e}, skipping")
-                    image_ids = np.array([], dtype=np.int64)
-                    point2D_idxs = np.array([], dtype=np.int64)
-            else:
-                image_ids = np.array([], dtype=np.int64)
-                point2D_idxs = np.array([], dtype=np.int64)
-            
-            points3D[point3D_id] = {
-                'xyz': xyz,
-                'rgb': rgb,
-                'error': error,
-                'track': list(zip(image_ids, point2D_idxs))
-            }
+                    # Read track length
+                    track_length_data = fid.read(8)
+                    if len(track_length_data) < 8:
+                        logger.warning(f"Cannot read track length for point {point3D_id}, skipping")
+                        continue
+                        
+                    track_length = struct.unpack("<Q", track_length_data)[0]
+                    
+                    # Add bounds checking to prevent overflow
+                    if track_length > 100000:  # Reasonable upper limit for track length
+                        logger.warning(f"Unusually large track length ({track_length}) for point {point3D_id}, truncating to 100000")
+                        track_length = 100000
+                    
+                    if track_length > 0:
+                        try:
+                            # Use int64 to prevent overflow in struct calculations
+                            total_elements = int(track_length) * 2
+                            total_bytes = int(track_length) * 8
+                            
+                            track_data = fid.read(total_bytes)
+                            if len(track_data) < total_bytes:
+                                logger.warning(f"Insufficient track data for point {point3D_id}, using empty track")
+                                image_ids = np.array([], dtype=np.int64)
+                                point2D_idxs = np.array([], dtype=np.int64)
+                            else:
+                                track_elems = struct.unpack(f"<{total_elements}i", track_data)
+                                image_ids = np.array(track_elems[0::2], dtype=np.int64)
+                                point2D_idxs = np.array(track_elems[1::2], dtype=np.int64)
+                        except (struct.error, OverflowError, MemoryError) as e:
+                            logger.warning(f"Error reading track for point {point3D_id}: {e}, using empty track")
+                            image_ids = np.array([], dtype=np.int64)
+                            point2D_idxs = np.array([], dtype=np.int64)
+                    else:
+                        image_ids = np.array([], dtype=np.int64)
+                        point2D_idxs = np.array([], dtype=np.int64)
+                    
+                    points3D[point3D_id] = {
+                        'xyz': xyz,
+                        'rgb': rgb,
+                        'error': error,
+                        'track': list(zip(image_ids, point2D_idxs))
+                    }
+                    
+                except (struct.error, ValueError) as e:
+                    logger.warning(f"Error reading 3D point: {e}, skipping")
+                    continue
+                    
+    except Exception as e:
+        logger.error(f"Error reading points3D.bin file: {e}")
+        
     return points3D
 
 
