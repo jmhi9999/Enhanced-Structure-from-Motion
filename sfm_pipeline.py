@@ -278,9 +278,11 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         # Use vocabulary tree for O(n log n) complexity
         vocab_tree = GPUVocabularyTree(
             device=device,
-            vocab_size=10000,
-            depth=6,
-            branching_factor=10
+            config={
+                'vocab_size': 10000,
+                'vocab_depth': 6,
+                'vocab_branching_factor': 10
+            }
         )
         
         # Build vocabulary

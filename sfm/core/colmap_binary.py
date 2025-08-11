@@ -281,6 +281,25 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -
             
         if result.returncode == 0:
             logger.info("COLMAP incremental mapping completed successfully")
+            
+            # Convert binary to text format for easier reading
+            model_converter_cmd = [
+                "colmap", "model_converter",
+                "--input_path", str(sparse_path / "0"),
+                "--output_path", str(sparse_path / "0"),
+                "--output_type", "TXT"
+            ]
+            
+            try:
+                logger.info("Converting COLMAP binary to text format...")
+                converter_result = subprocess.run(model_converter_cmd, capture_output=True, text=True, timeout=120)
+                if converter_result.returncode == 0:
+                    logger.info("Binary to text conversion successful")
+                else:
+                    logger.warning(f"Binary to text conversion failed: {converter_result.stderr}")
+            except Exception as e:
+                logger.warning(f"Model converter error (non-critical): {e}")
+            
             return True
         else:
             logger.error(f"COLMAP mapping failed with return code {result.returncode}")
@@ -296,84 +315,135 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -
 def read_cameras_binary(path_to_model_file: Path) -> Dict[int, Dict]:
     """Read cameras.bin file"""
     cameras = {}
-    with open(path_to_model_file, "rb") as fid:
-        num_cameras = struct.unpack("<Q", fid.read(8))[0]
-        for _ in range(num_cameras):
-            camera_properties = struct.unpack("<iiQQ", fid.read(24))
-            camera_id = camera_properties[0]
-            model_id = camera_properties[1]
-            width = camera_properties[2]
-            height = camera_properties[3]
-            num_params = struct.unpack("<Q", fid.read(8))[0]
-            params = struct.unpack(f"<{num_params}d", fid.read(8 * num_params))
-            cameras[camera_id] = {
-                'model_id': model_id,
-                'model': 'PINHOLE',  # Simplified
-                'width': width,
-                'height': height,
-                'params': list(params)
-            }
+    try:
+        with open(path_to_model_file, "rb") as fid:
+            num_cameras = struct.unpack("<Q", fid.read(8))[0]
+            
+            # Bounds check
+            if num_cameras > 10000:
+                logger.warning(f"Unusually large number of cameras: {num_cameras}, truncating to 10000")
+                num_cameras = 10000
+            
+            for _ in range(num_cameras):
+                # Read camera properties with proper error handling
+                try:
+                    camera_properties = struct.unpack("<IiQQ", fid.read(24))  # Use I for unsigned int
+                    camera_id = camera_properties[0]
+                    model_id = camera_properties[1]
+                    width = int(camera_properties[2])
+                    height = int(camera_properties[3])
+                    
+                    num_params = struct.unpack("<Q", fid.read(8))[0]
+                    
+                    # Bounds check for params
+                    if num_params > 20:  # Reasonable limit for camera parameters
+                        logger.warning(f"Unusually large number of camera parameters: {num_params}, truncating to 20")
+                        num_params = 20
+                    
+                    params = struct.unpack(f"<{num_params}d", fid.read(8 * num_params))
+                    
+                    cameras[camera_id] = {
+                        'model_id': model_id,
+                        'model': 'PINHOLE',  # Simplified
+                        'width': width,
+                        'height': height,
+                        'params': list(params)
+                    }
+                except (struct.error, OverflowError, ValueError) as e:
+                    logger.warning(f"Error reading camera data: {e}, skipping camera")
+                    continue
+                    
+    except Exception as e:
+        logger.error(f"Error reading cameras.bin file: {e}")
+        return {}
+        
     return cameras
 
 
 def read_images_binary(path_to_model_file: Path) -> Dict[int, Dict]:
     """Read images.bin file"""
     images = {}
-    with open(path_to_model_file, "rb") as fid:
-        num_reg_images = struct.unpack("<Q", fid.read(8))[0]
-        
-        # Add bounds checking to prevent overflow
-        if num_reg_images > 100000:  # Reasonable upper limit
-            logger.warning(f"Unusually large number of registered images: {num_reg_images}, truncating to 100000")
-            num_reg_images = 100000
-        
-        for _ in range(num_reg_images):
-            binary_image_properties = struct.unpack("<iidddddi", fid.read(64))
-            image_id = binary_image_properties[0]
-            qvec = np.array(binary_image_properties[1:5])
-            tvec = np.array(binary_image_properties[5:8])
-            camera_id = binary_image_properties[8]
-            
-            # Read image name
-            image_name = ""
-            current_char = struct.unpack("<c", fid.read(1))[0]
-            while current_char != b"\x00":
-                image_name += current_char.decode("utf-8")
-                current_char = struct.unpack("<c", fid.read(1))[0]
-            
-            # Read 2D points with overflow protection
-            num_points2D = struct.unpack("<Q", fid.read(8))[0]
+    try:
+        with open(path_to_model_file, "rb") as fid:
+            num_reg_images = struct.unpack("<Q", fid.read(8))[0]
             
             # Add bounds checking to prevent overflow
-            if num_points2D > 1000000:  # Reasonable upper limit
-                logger.warning(f"Unusually large number of 2D points ({num_points2D}) for image {image_name}, truncating to 1000000")
-                num_points2D = 1000000
+            if num_reg_images > 100000:  # Reasonable upper limit
+                logger.warning(f"Unusually large number of registered images: {num_reg_images}, truncating to 100000")
+                num_reg_images = 100000
             
-            if num_points2D > 0:
+            for _ in range(num_reg_images):
                 try:
-                    # Use int64 to prevent overflow in struct calculations
-                    total_elements = int(num_points2D) * 3
-                    total_bytes = int(num_points2D) * 24
+                    # Try COLMAP standard 64-byte format first
+                    binary_image_properties = struct.unpack("<iidddddi", fid.read(64))
+                    image_id = binary_image_properties[0]
+                    qvec = np.array(binary_image_properties[1:5])
+                    tvec = np.array(binary_image_properties[5:8])
+                    camera_id = binary_image_properties[8]
+                except struct.error:
+                    # Fallback: try alternative formats
+                    try:
+                        # Go back and try 56-byte format
+                        fid.seek(fid.tell() - 64)
+                        binary_image_properties = struct.unpack("<Idddddi", fid.read(56))
+                        image_id = binary_image_properties[0]
+                        qvec = np.array(binary_image_properties[1:5])
+                        tvec = np.array(binary_image_properties[5:8])
+                        camera_id = binary_image_properties[8]
+                    except struct.error as e:
+                        logger.warning(f"Error reading image properties: {e}, skipping image")
+                        continue
+                
+                try:
+                    # Read image name
+                    image_name = ""
+                    current_char = struct.unpack("<c", fid.read(1))[0]
+                    while current_char != b"\x00":
+                        image_name += current_char.decode("utf-8")
+                        current_char = struct.unpack("<c", fid.read(1))[0]
                     
-                    x_y_id_s = struct.unpack(f"<{total_elements}d", fid.read(total_bytes))
-                    xys = np.column_stack([np.array(x_y_id_s[0::3]), np.array(x_y_id_s[1::3])])
-                    point3D_ids = np.array(x_y_id_s[2::3], dtype=np.int64)
-                except (struct.error, OverflowError, MemoryError) as e:
-                    logger.warning(f"Error reading 2D points for image {image_name}: {e}, skipping")
-                    xys = np.array([]).reshape(0, 2)
-                    point3D_ids = np.array([], dtype=np.int64)
-            else:
-                xys = np.array([]).reshape(0, 2)
-                point3D_ids = np.array([], dtype=np.int64)
-            
-            images[image_id] = {
-                'qvec': qvec,
-                'tvec': tvec,
-                'camera_id': camera_id,
-                'name': image_name,
-                'xys': xys,
-                'point3D_ids': point3D_ids
-            }
+                    # Read 2D points with overflow protection
+                    num_points2D = struct.unpack("<Q", fid.read(8))[0]
+                    
+                    # Add bounds checking to prevent overflow
+                    if num_points2D > 1000000:  # Reasonable upper limit
+                        logger.warning(f"Unusually large number of 2D points ({num_points2D}) for image {image_name}, truncating to 1000000")
+                        num_points2D = 1000000
+                    
+                    if num_points2D > 0:
+                        try:
+                            # Use int64 to prevent overflow in struct calculations
+                            total_elements = int(num_points2D) * 3
+                            total_bytes = int(num_points2D) * 24
+                            
+                            x_y_id_s = struct.unpack(f"<{total_elements}d", fid.read(total_bytes))
+                            xys = np.column_stack([np.array(x_y_id_s[0::3]), np.array(x_y_id_s[1::3])])
+                            point3D_ids = np.array(x_y_id_s[2::3], dtype=np.int64)
+                        except (struct.error, OverflowError, MemoryError) as e:
+                            logger.warning(f"Error reading 2D points for image {image_name}: {e}, skipping")
+                            xys = np.array([]).reshape(0, 2)
+                            point3D_ids = np.array([], dtype=np.int64)
+                    else:
+                        xys = np.array([]).reshape(0, 2)
+                        point3D_ids = np.array([], dtype=np.int64)
+                    
+                    images[image_id] = {
+                        'qvec': qvec,
+                        'tvec': tvec,
+                        'camera_id': camera_id,
+                        'name': image_name,
+                        'xys': xys,
+                        'point3D_ids': point3D_ids
+                    }
+                    
+                except (struct.error, UnicodeDecodeError, ValueError) as e:
+                    logger.warning(f"Error reading image data for image_id {image_id}: {e}, skipping")
+                    continue
+                    
+    except Exception as e:
+        logger.error(f"Error reading images.bin file: {e}")
+        return {}
+        
     return images
 
 
@@ -427,6 +497,130 @@ def read_points3d_binary(path_to_model_file: Path) -> Dict[int, Dict]:
                 'track': list(zip(image_ids, point2D_idxs))
             }
     return points3D
+
+
+def read_colmap_text_results(sparse_path: Path) -> Tuple[Dict, Dict, Dict]:
+    """Read COLMAP text results (fallback when binary reading fails)"""
+    
+    # Look for reconstruction directory
+    reconstruction_dirs = [d for d in sparse_path.iterdir() if d.is_dir()]
+    if not reconstruction_dirs:
+        logger.warning("No reconstruction found")
+        return {}, {}, {}
+    
+    recon_dir = reconstruction_dirs[0]
+    logger.info(f"Reading COLMAP text results from {recon_dir}")
+    
+    cameras_file = recon_dir / "cameras.txt"
+    images_file = recon_dir / "images.txt"
+    points_file = recon_dir / "points3D.txt"
+    
+    cameras, images, points3d = {}, {}, {}
+    
+    # Read cameras.txt
+    if cameras_file.exists():
+        try:
+            with open(cameras_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        parts = line.split()
+                        if len(parts) >= 5:
+                            camera_id = int(parts[0])
+                            model = parts[1]
+                            width = int(parts[2])
+                            height = int(parts[3])
+                            params = [float(p) for p in parts[4:]]
+                            cameras[camera_id] = {
+                                'model': model,
+                                'width': width,
+                                'height': height,
+                                'params': params
+                            }
+            logger.info(f"Read {len(cameras)} cameras from text file")
+        except Exception as e:
+            logger.warning(f"Error reading cameras.txt: {e}")
+    
+    # Read images.txt
+    if images_file.exists():
+        try:
+            with open(images_file, 'r') as f:
+                lines = f.readlines()
+                i = 0
+                while i < len(lines):
+                    line = lines[i].strip()
+                    if line and not line.startswith('#'):
+                        parts = line.split()
+                        if len(parts) >= 10:
+                            image_id = int(parts[0])
+                            qvec = [float(parts[j]) for j in range(1, 5)]
+                            tvec = [float(parts[j]) for j in range(5, 8)]
+                            camera_id = int(parts[8])
+                            name = parts[9]
+                            
+                            # Next line contains 2D points (optional)
+                            xys, point3D_ids = [], []
+                            if i + 1 < len(lines):
+                                points_line = lines[i + 1].strip()
+                                if points_line and not points_line.startswith('#'):
+                                    point_parts = points_line.split()
+                                    for j in range(0, len(point_parts), 3):
+                                        if j + 2 < len(point_parts):
+                                            x, y = float(point_parts[j]), float(point_parts[j + 1])
+                                            point3d_id = int(point_parts[j + 2]) if point_parts[j + 2] != '-1' else -1
+                                            xys.append([x, y])
+                                            point3D_ids.append(point3d_id)
+                            
+                            images[image_id] = {
+                                'qvec': qvec,
+                                'tvec': tvec,
+                                'camera_id': camera_id,
+                                'name': name,
+                                'xys': np.array(xys).reshape(-1, 2) if xys else np.array([]).reshape(0, 2),
+                                'point3D_ids': np.array(point3D_ids, dtype=np.int64) if point3D_ids else np.array([], dtype=np.int64)
+                            }
+                            i += 2  # Skip the points line
+                        else:
+                            i += 1
+                    else:
+                        i += 1
+            logger.info(f"Read {len(images)} images from text file")
+        except Exception as e:
+            logger.warning(f"Error reading images.txt: {e}")
+    
+    # Read points3D.txt
+    if points_file.exists():
+        try:
+            with open(points_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        parts = line.split()
+                        if len(parts) >= 7:
+                            point_id = int(parts[0])
+                            xyz = [float(parts[j]) for j in range(1, 4)]
+                            rgb = [int(parts[j]) for j in range(4, 7)]
+                            error = float(parts[7]) if len(parts) > 7 else 0.0
+                            
+                            # Track information (image_id, point2d_idx pairs)
+                            track = []
+                            for j in range(8, len(parts), 2):
+                                if j + 1 < len(parts):
+                                    img_id = int(parts[j])
+                                    point2d_idx = int(parts[j + 1])
+                                    track.append((img_id, point2d_idx))
+                            
+                            points3d[point_id] = {
+                                'xyz': xyz,
+                                'rgb': rgb,
+                                'error': error,
+                                'track': track
+                            }
+            logger.info(f"Read {len(points3d)} 3D points from text file")
+        except Exception as e:
+            logger.warning(f"Error reading points3D.txt: {e}")
+    
+    return points3d, cameras, images
 
 
 def read_colmap_binary_results(sparse_path: Path) -> Tuple[Dict, Dict, Dict]:
@@ -486,6 +680,19 @@ def read_colmap_binary_results(sparse_path: Path) -> Tuple[Dict, Dict, Dict]:
         num_images = len(images)
         num_points = len(points3d)
         
+        # If binary reading mostly failed, try text format
+        if num_cameras == 0 and num_images == 0 and num_points > 0:
+            logger.warning("Binary reading failed for cameras and images, trying text format...")
+            text_points3d, text_cameras, text_images = read_colmap_text_results(sparse_path)
+            
+            if text_cameras or text_images:
+                logger.info("Successfully read cameras and images from text format")
+                cameras = text_cameras
+                images = text_images
+                # Keep points3d from binary if it worked
+                num_cameras = len(cameras)
+                num_images = len(images)
+        
         if num_cameras > 0 or num_images > 0 or num_points > 0:
             # Calculate statistics
             registered_images = sum(1 for img_data in images.values() if len(img_data.get('point3D_ids', [])) > 0)
@@ -514,13 +721,17 @@ def read_colmap_binary_results(sparse_path: Path) -> Tuple[Dict, Dict, Dict]:
         
         return points3d, cameras, images
     else:
-        logger.error("COLMAP reconstruction files not found")
-        missing = []
-        if not cameras_file.exists(): missing.append("cameras.bin")
-        if not images_file.exists(): missing.append("images.bin")
-        if not points_file.exists(): missing.append("points3D.bin")
-        logger.error(f"Missing files: {missing}")
-        return {}, {}, {}
+        logger.warning("COLMAP binary reconstruction files not found or could not be read")
+        # Try text format as fallback
+        logger.info("Attempting to read text format files...")
+        text_points3d, text_cameras, text_images = read_colmap_text_results(sparse_path)
+        
+        if text_cameras or text_images or text_points3d:
+            logger.info("Successfully read COLMAP text format results")
+            return text_points3d, text_cameras, text_images
+        else:
+            logger.error("No COLMAP reconstruction files found (binary or text)")
+            return {}, {}, {}
 
 
 def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[str, str], Any],

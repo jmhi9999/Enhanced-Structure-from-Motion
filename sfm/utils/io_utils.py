@@ -119,9 +119,12 @@ def save_images_bin(filepath: Path, images: Dict):
             
             # Write point3D IDs
             for point3d_id in point3d_ids:
-                # Convert ID to int if string
+                # Convert ID to int if string, handle -1 (invalid points)
                 point3d_id_int = int(point3d_id) if isinstance(point3d_id, str) else int(point3d_id)
-                f.write(point3d_id_int.to_bytes(4, byteorder='little'))
+                # COLMAP uses -1 for invalid points, but we need to handle the unsigned conversion
+                if point3d_id_int < 0:
+                    point3d_id_int = 4294967295  # 0xFFFFFFFF (max uint32 value represents -1)
+                f.write(point3d_id_int.to_bytes(4, byteorder='little', signed=False))
 
 
 def save_points3d_bin(filepath: Path, points3d: Dict):
@@ -155,7 +158,7 @@ def save_points3d_bin(filepath: Path, points3d: Dict):
             # Write RGB color
             rgb = point['rgb']
             for color in rgb:
-                f.write(color.to_bytes(1, byteorder='little'))
+                f.write(int(color).to_bytes(1, byteorder='little'))
             
             # Write error
             f.write(struct.pack('d', point['error']))
@@ -203,10 +206,14 @@ def save_reconstruction_info(filepath: Path, cameras: Dict, images: Dict, points
             return {k: convert_to_json_serializable(v) for k, v in obj.items()}
         elif isinstance(obj, list):
             return [convert_to_json_serializable(item) for item in obj]
-        elif isinstance(obj, (np.integer, np.int64)):
+        elif isinstance(obj, tuple):
+            return [convert_to_json_serializable(item) for item in obj]
+        elif isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
             return int(obj)
-        elif isinstance(obj, (np.floating, np.float64)):
+        elif isinstance(obj, (np.floating, np.float64, np.float32)):
             return float(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
         return obj
     
     info = {

@@ -135,7 +135,17 @@ class DenseDepthEstimator:
         R = self._quaternion_to_rotation_matrix(qvec)
         
         # Create camera matrix
-        K = np.array(camera['params'][:3]).reshape(3, 3)
+        params = camera['params']
+        if len(params) >= 4:  # PINHOLE model: fx, fy, cx, cy
+            fx, fy, cx, cy = params[:4]
+            K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+        elif len(params) >= 3:  # SIMPLE_PINHOLE model: f, cx, cy
+            f, cx, cy = params[:3]
+            K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+        else:
+            logger.warning(f"Invalid camera parameters: {params}, using default")
+            f = max(width, height) * 1.2
+            K = np.array([[f, 0, width/2], [0, f, height/2], [0, 0, 1]])
         
         # Get sparse depth values
         sparse_depths = self._get_sparse_depths(
