@@ -97,27 +97,27 @@ def save_images_bin(filepath: Path, images: Dict):
             f.write(len(image_name).to_bytes(8, byteorder='little'))
             f.write(image_name)
             
-            # Write quaternion (rotation)
-            qvec = image['qvec']
+            # Write quaternion (rotation) - provide default if missing
+            qvec = image.get('qvec', [1.0, 0.0, 0.0, 0.0])  # Default identity quaternion
             for q in qvec:
                 f.write(struct.pack('d', q))
             
-            # Write translation vector
-            tvec = image['tvec']
+            # Write translation vector - provide default if missing
+            tvec = image.get('tvec', [0.0, 0.0, 0.0])  # Default zero translation
             for t in tvec:
                 f.write(struct.pack('d', t))
             
-            # Write number of points
-            num_points = len(image['xys'])
+            # Write number of points - provide defaults if missing
+            xys = image.get('xys', [])
+            point3d_ids = image.get('point3D_ids', [])
+            num_points = len(xys)
             f.write(num_points.to_bytes(8, byteorder='little'))
             
             # Write 2D points
-            xys = image['xys']
             for xy in xys:
                 f.write(struct.pack('dd', xy[0], xy[1]))
             
             # Write point3D IDs
-            point3d_ids = image['point3D_ids']
             for point3d_id in point3d_ids:
                 # Convert ID to int if string
                 point3d_id_int = int(point3d_id) if isinstance(point3d_id, str) else int(point3d_id)
