@@ -466,7 +466,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             stage_start = time.time()
             
             try:
-                from generate_dense_pointcloud import simple_depth_to_pointcloud_integrated
+                from sfm.core.dense_pointcloud import simple_depth_to_pointcloud_integrated
                 
                 # Generate dense point cloud
                 pointcloud_path = output_path / "dense_pointcloud_3dgs.ply"
