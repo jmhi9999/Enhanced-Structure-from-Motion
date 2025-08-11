@@ -280,6 +280,51 @@ def generate_dense_pointcloud(
     
     return len(combined_points)
 
+def convert_dense_ply_to_points3d_bin(ply_path: Path, output_path: Path):
+    """Convert dense point cloud PLY to COLMAP points3D.bin format"""
+    import struct
+    
+    logger.info(f"Converting {ply_path} to COLMAP points3D.bin format...")
+    
+    # Read PLY file
+    points = []
+    colors = []
+    
+    with open(ply_path, 'r') as f:
+        # Skip header
+        line = f.readline()
+        while line.strip() != 'end_header':
+            line = f.readline()
+        
+        # Read points
+        for line_num, line in enumerate(f):
+            if line.strip():
+                parts = line.strip().split()
+                if len(parts) >= 6:
+                    x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
+                    r, g, b = int(parts[3]), int(parts[4]), int(parts[5])
+                    points.append([x, y, z])
+                    colors.append([r, g, b])
+    
+    logger.info(f"Read {len(points)} points from PLY")
+    
+    # Convert to COLMAP points3D.bin format
+    points3d_dict = {}
+    for i, (point, color) in enumerate(zip(points, colors)):
+        points3d_dict[i] = {
+            'xyz': point,
+            'rgb': color,
+            'error': 0.0,  # Default error
+            'track': []  # Empty track for dense points
+        }
+    
+    # Save using existing function
+    from sfm.utils.io_utils import save_points3d_bin
+    save_points3d_bin(output_path, points3d_dict)
+    
+    logger.info(f"Converted dense point cloud to {output_path}")
+    return len(points3d_dict)
+
 def simple_depth_to_pointcloud():
     """Simple depth map to point cloud conversion without COLMAP dependency"""
     depth_maps_path = Path("../gaussian-splatting/output/enhanced_sfm_aliked_JeewonHouse_highQuality/depth_maps")

@@ -23,6 +23,7 @@ from sfm.core.geometric_verification import GeometricVerification, RANSACMethod
 from sfm.core.gpu_bundle_adjustment import GPUBundleAdjustment
 from sfm.core.dense_depth import DenseDepthEstimator
 from sfm.core.gpu_vocabulary_tree import GPUVocabularyTree
+from sfm.core.semantic_segmentation import SemanticSegmenter
 from sfm.utils.io_utils import save_colmap_format, load_images, save_features, save_matches
 from sfm.utils.image_utils import resize_image
 
@@ -72,6 +73,14 @@ def parse_args():
                        help="Weight for SfM vs monocular depth fusion")
     parser.add_argument("--bilateral_filter", action="store_true",
                        help="Apply bilateral filtering to depth maps")
+
+    # Semantic Segmentation
+    parser.add_argument("--use_semantics", action="store_true",
+                       help="Enable semantic segmentation for filtering matches.")
+    parser.add_argument("--semantic_model", type=str, default="nvidia/segformer-b5-finetuned-ade-512-512",
+                       help="Semantic segmentation model to use.")
+    parser.add_argument("--semantic_batch_size", type=int, default=4,
+                       help="Batch size for semantic segmentation.")
     
     # Device and performance
     parser.add_argument("--device", type=str, default="auto",
@@ -87,13 +96,18 @@ def parse_args():
     parser.add_argument("--scale_recovery", action="store_true", default=True,
                        help="Enable scale recovery for consistent scene scale")
     
-    # Dense Point Cloud Generation
-    parser.add_argument("--generate_dense_pointcloud", action="store_true", default=True,
-                       help="Generate dense point cloud from depth maps for 3DGS")
-    parser.add_argument("--pointcloud_subsample", type=int, default=None,
-                       help="Subsample factor for point cloud generation (auto-adjusted based on dataset size)")
-    parser.add_argument("--max_pointcloud_images", type=int, default=None,
-                       help="Maximum number of images to use for point cloud generation (default: all images)")
+    
+    # Semantic Robust Points (NEW - Recommended for 3DGS)
+    parser.add_argument("--use_semantic_robust_points", action="store_true", default=True,
+                       help="Use semantic segmentation to create robust points3D.bin for 3DGS (recommended)")
+    parser.add_argument("--semantic_target_points", type=int, default=20000,
+                       help="Target number of points for semantic robust filtering")
+    parser.add_argument("--semantic_quality_threshold", type=float, default=2.0,
+                       help="Maximum reprojection error for semantic point filtering")
+    
+    # 3DGS Integration
+    parser.add_argument("--copy_to_3dgs_dir", type=str, default=None,
+                       help="Directory to copy COLMAP sparse files and dense point cloud for 3D Gaussian Splatting")
     
     # Profiling
     parser.add_argument("--profile", action="store_true",
@@ -158,6 +172,13 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'depth_model': args.depth_model,
             'fusion_weight': getattr(args, 'fusion_weight', 0.7),
             'bilateral_filter': getattr(args, 'bilateral_filter', False),
+            'use_semantics': args.use_semantics,
+            'semantic_model': args.semantic_model,
+            'semantic_batch_size': args.semantic_batch_size,
+            'use_semantic_robust_points': args.use_semantic_robust_points,
+            'semantic_target_points': args.semantic_target_points,
+            'semantic_quality_threshold': args.semantic_quality_threshold,
+            'copy_to_3dgs_dir': args.copy_to_3dgs_dir,
             'scale_recovery': args.scale_recovery,
             'high_quality': args.high_quality,
             'device': args.device,
@@ -182,7 +203,8 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info(f"Feature extractor: {kwargs.get('feature_extractor', 'superpoint')}")
     logger.info(f"GPU brute force matching: {kwargs.get('use_brute_force', True)}")
     logger.info(f"High quality mode: {kwargs.get('high_quality', False)}")
-    
+    logger.info(f"Use semantics: {kwargs.get('use_semantics', False)}")
+
     # Performance tracking
     start_time = time.time()
     stage_times = {}
@@ -202,6 +224,49 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     
     stage_times['preprocessing'] = time.time() - stage_start
     logger.info(f"Preprocessing completed in {stage_times['preprocessing']:.2f}s")
+
+    # Stage 1.5: Semantic Segmentation
+    semantic_masks = None
+    if kwargs.get('use_semantics', False):
+        logger.info("Stage 1.5: Semantic Segmentation...")
+        stage_start = time.time()
+        
+        mask_output_dir = output_path / "semantic_masks"
+        mask_output_dir.mkdir(exist_ok=True)
+        
+        # Caching: Check if all masks already exist
+        all_masks_exist = True
+        for img_path in image_paths:
+            mask_path = mask_output_dir / f"{Path(img_path).name}.png"
+            if not mask_path.exists():
+                all_masks_exist = False
+                break
+        
+        if all_masks_exist:
+            logger.info("Found existing semantic masks for all images, loading them.")
+            semantic_masks = {}
+            for img_path in tqdm(image_paths, desc="Loading semantic masks"):
+                mask_path = mask_output_dir / f"{Path(img_path).name}.png"
+                mask = np.array(Image.open(mask_path))
+                semantic_masks[img_path] = mask
+        else:
+            logger.info("Running semantic segmentation model...")
+            segmenter = SemanticSegmenter(
+                model_name=kwargs.get('semantic_model', 'nvidia/segformer-b5-finetuned-ade-512-512'),
+                device=device
+            )
+            semantic_masks = segmenter.segment_images_batch(
+                image_paths, 
+                batch_size=kwargs.get('semantic_batch_size', 4)
+            )
+            segmenter.save_masks(semantic_masks, str(mask_output_dir))
+            
+            # Log label info for user reference
+            label_info = segmenter.get_label_info()
+            logger.info(f"Semantic labels: {label_info}")
+
+        stage_times['semantic_segmentation'] = time.time() - stage_start
+        logger.info(f"Semantic segmentation completed in {stage_times['semantic_segmentation']:.2f}s")
     
     # Stage 2: Feature extraction
     logger.info("Stage 2: Extracting features...")
@@ -386,11 +451,21 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         stage_times['feature_matching'] = time.time() - stage_start
         logger.info(f"Feature matching completed in {stage_times['feature_matching']:.2f}s")
     
-    # Stage 5: Skip geometric verification - let COLMAP handle it
-    logger.info("Stage 5: Skipping separate geometric verification (COLMAP will handle)...")
-    stage_times['geometric_verification'] = 0.0
-    verified_matches = matches  # Use raw matches
-    
+    # Stage 5: Semantic Match Filtering
+    verified_matches = matches
+    if kwargs.get('use_semantics', False) and semantic_masks is not None:
+        logger.info("Stage 5: Applying semantic filtering to matches...")
+        stage_start = time.time()
+        
+        verifier = GeometricVerification()
+        verified_matches = verifier.filter_by_semantics(matches, features, semantic_masks)
+        
+        stage_times['semantic_filtering'] = time.time() - stage_start
+        logger.info(f"Semantic filtering completed in {stage_times['semantic_filtering']:.2f}s")
+    else:
+        logger.info("Stage 5: Skipping semantic filtering.")
+        stage_times['semantic_filtering'] = 0.0
+
     # Stage 6: COLMAP-based SfM reconstruction using binary (avoid pycolmap CUDA issues)
     logger.info("Stage 6: COLMAP-based SfM reconstruction using binary...")
     stage_start = time.time()
@@ -403,7 +478,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     
     sparse_points, cameras, images = colmap_binary_reconstruction(
         features=features,
-        matches=matches,  # Use raw matches, COLMAP will verify
+        matches=verified_matches,  # Use semantically (and optionally geometrically) verified matches
         output_path=output_path,
         image_dir=image_dir
     )
@@ -434,6 +509,56 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         stage_times['bundle_adjustment'] = time.time() - stage_start
         logger.info(f"Bundle adjustment completed in {stage_times['bundle_adjustment']:.2f}s")
     
+    # Stage 7.5: Semantic Robust Points3D for 3DGS (NEW - Recommended approach)
+    if kwargs.get('use_semantic_robust_points', True):
+        logger.info("Stage 7.5: Creating semantic-robust points3D.bin for 3DGS...")
+        stage_start = time.time()
+        
+        try:
+            from sfm.core.semantic_robust_points import SemanticRobustPoints
+            
+            # Create robust sparse directory
+            robust_sparse_dir = output_path / "sparse_robust" / "0"
+            robust_sparse_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Copy cameras.bin and images.bin from original sparse reconstruction
+            import shutil
+            original_sparse_dir = output_path / "sparse" / "0"
+            if original_sparse_dir.exists():
+                shutil.copy2(original_sparse_dir / "cameras.bin", robust_sparse_dir / "cameras.bin")
+                shutil.copy2(original_sparse_dir / "images.bin", robust_sparse_dir / "images.bin")
+            
+            # Create semantic robust points filter
+            semantic_filter = SemanticRobustPoints(device=device)
+            
+            # Extract image directory from first image path
+            first_image_path = Path(next(iter(features.keys())))
+            image_dir = first_image_path.parent
+            
+            # Generate robust points3D.bin
+            num_robust_points = semantic_filter.create_robust_points3d_bin(
+                colmap_points3d=sparse_points,
+                colmap_images=images,
+                image_dir=image_dir,
+                output_path=robust_sparse_dir / "points3D.bin",
+                target_points=kwargs.get('semantic_target_points', 20000),
+                quality_threshold=kwargs.get('semantic_quality_threshold', 2.0)
+            )
+            
+            if num_robust_points > 0:
+                logger.info(f"✅ Created robust sparse reconstruction with {num_robust_points} semantic-filtered points")
+                # Update sparse_points for potential downstream use
+                from sfm.core.colmap_binary import read_colmap_binary_results
+                sparse_points, _, _ = read_colmap_binary_results(output_path / "sparse_robust")
+            else:
+                logger.warning("Semantic robust points creation failed, using original sparse reconstruction")
+            
+        except Exception as e:
+            logger.warning(f"Semantic robust points creation failed: {e}, using original sparse reconstruction")
+        
+        stage_times['semantic_robust_points'] = time.time() - stage_start
+        logger.info(f"Semantic robust points completed in {stage_times['semantic_robust_points']:.2f}s")
+    
     # Stage 8: Dense depth estimation (for 3DGS)
     if kwargs.get('use_monocular_depth', False):
         logger.info("Stage 8: Dense depth estimation...")
@@ -460,36 +585,61 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         stage_times['dense_depth'] = time.time() - stage_start
         logger.info(f"Dense depth estimation completed in {stage_times['dense_depth']:.2f}s")
         
-        # Stage 8.5: Generate dense point cloud from depth maps
-        if kwargs.get('generate_dense_pointcloud', True):
-            logger.info("Stage 8.5: Generating dense point cloud...")
-            stage_start = time.time()
             
-            try:
-                from sfm.core.dense_pointcloud import simple_depth_to_pointcloud_integrated
-                
-                # Generate dense point cloud
-                pointcloud_path = output_path / "dense_pointcloud_3dgs.ply"
-                num_points = simple_depth_to_pointcloud_integrated(
-                    depth_maps_dir=depth_dir,
-                    output_path=pointcloud_path,
-                    subsample=kwargs.get('pointcloud_subsample', 6),
-                    max_images=kwargs.get('max_pointcloud_images', None)
-                )
-                
-                if num_points > 0:
-                    logger.info(f"Generated dense point cloud with {num_points:,} points")
-                    logger.info(f"Point cloud saved to: {pointcloud_path}")
+    # Stage 9: Copy reconstruction files for 3DGS compatibility
+    gs_input_dir = kwargs.get('copy_to_3dgs_dir')
+    if gs_input_dir:
+        logger.info("Stage 9: Preparing files for 3DGS...")
+        stage_start = time.time()
+        
+        try:
+            import shutil
+            gs_input_path = Path(gs_input_dir)
+            gs_sparse_dir = gs_input_path / "sparse" / "0"
+            gs_sparse_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Choose source directory - prefer semantic robust if available
+            robust_sparse_dir = output_path / "sparse_robust" / "0"
+            original_sparse_dir = output_path / "sparse" / "0"
+            
+            if robust_sparse_dir.exists() and kwargs.get('use_semantic_robust_points', True):
+                source_sparse_dir = robust_sparse_dir
+                logger.info("Using semantic-robust sparse reconstruction for 3DGS")
+            elif original_sparse_dir.exists():
+                source_sparse_dir = original_sparse_dir
+                logger.info("Using original sparse reconstruction for 3DGS")
+            else:
+                logger.warning("No sparse reconstruction found - cannot copy files for 3DGS")
+                stage_times['3dgs_preparation'] = 0
+                return {}
+            
+            # Copy all COLMAP files (cameras.bin, images.bin, points3D.bin)
+            for filename in ['cameras.bin', 'images.bin', 'points3D.bin']:
+                src_file = source_sparse_dir / filename
+                if src_file.exists():
+                    shutil.copy2(src_file, gs_sparse_dir / filename)
+                    logger.info(f"Copied {filename} to 3DGS directory")
                 else:
-                    logger.warning("Failed to generate dense point cloud")
-                    
-            except ImportError as e:
-                logger.warning(f"Dense point cloud generation not available: {e}")
-            except Exception as e:
-                logger.error(f"Error generating dense point cloud: {e}")
+                    logger.warning(f"File {filename} not found in source sparse directory")
             
-            stage_times['dense_pointcloud'] = time.time() - stage_start
-            logger.info(f"Dense point cloud generation completed in {stage_times['dense_pointcloud']:.2f}s")
+            # Copy images directory if it exists
+            input_image_dir = Path(input_dir)
+            gs_images_dir = gs_input_path / "images"
+            if input_image_dir.exists():
+                if gs_images_dir.exists():
+                    import shutil
+                    shutil.rmtree(gs_images_dir)
+                shutil.copytree(input_image_dir, gs_images_dir)
+                logger.info(f"Copied {len(list(gs_images_dir.iterdir()))} images to 3DGS directory")
+            
+            logger.info(f"✅ 3DGS files ready at: {gs_sparse_dir}")
+            logger.info(f"   - Use with: python train.py -s {gs_input_path}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to prepare files for 3DGS: {e}")
+        
+        stage_times['3dgs_preparation'] = time.time() - stage_start
+        logger.info(f"3DGS preparation completed in {stage_times['3dgs_preparation']:.2f}s")
     
     # Stage 9: Scale recovery (for 3DGS consistency)
     if kwargs.get('scale_recovery', False):
@@ -526,19 +676,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         output_dir=str(colmap_dir)
     )
     
-    # Save additional 3DGS-specific data
-    gs_data = {
-        'sparse_points': sparse_points,
-        'cameras': cameras,
-        'images': images,
-        'features': features,
-        'dense_depth_maps': dense_depth_maps if kwargs.get('use_monocular_depth', False) else None,
-        'scale_info': scale_recovery.get_scale_info() if kwargs.get('scale_recovery', False) else None
-    }
-    
-    import pickle
-    with open(output_path / "3dgs_data.pkl", 'wb') as f:
-        pickle.dump(gs_data, f)
+    # Note: 3dgs_data.pkl generation removed - COLMAP standard output is sufficient for most 3DGS implementations
     
     stage_times['saving'] = time.time() - stage_start
     logger.info(f"Saving completed in {stage_times['saving']:.2f}s")
