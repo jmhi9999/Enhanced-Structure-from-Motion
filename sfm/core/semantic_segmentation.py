@@ -13,7 +13,7 @@ class SemanticSegmenter:
     """
     A class to handle semantic segmentation of images using a pre-trained SegFormer model.
     """
-    def __init__(self, model_name="nvidia/segformer-b5-finetuned-ade-512-512", device="cuda"):
+    def __init__(self, model_name="nvidia/segformer-b0-finetuned-ade-512-512", device="cuda"):
         """
         Initializes the SemanticSegmenter.
 

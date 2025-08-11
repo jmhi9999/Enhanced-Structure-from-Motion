@@ -51,7 +51,7 @@ DEFAULT_CLASS_CONFIG = {'weight': 0.5, 'max_points_per_image': 100}
 class SemanticRobustPoints:
     """Generate robust points3D.bin using semantic segmentation filtering"""
     
-    def __init__(self, device: str = "cuda", segmentation_model: str = "nvidia/segformer-b5-finetuned-ade-512-512"):
+    def __init__(self, device: str = "cuda", segmentation_model: str = "nvidia/segformer-b0-finetuned-ade-512-512"):
         """
         Initialize semantic-aware point filtering
         

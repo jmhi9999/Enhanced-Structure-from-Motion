@@ -77,7 +77,7 @@ def parse_args():
     # Semantic Segmentation
     parser.add_argument("--use_semantics", action="store_true",
                        help="Enable semantic segmentation for filtering matches.")
-    parser.add_argument("--semantic_model", type=str, default="nvidia/segformer-b5-finetuned-ade-512-512",
+    parser.add_argument("--semantic_model", type=str, default="nvidia/segformer-b0-finetuned-ade-512-512",
                        help="Semantic segmentation model to use.")
     parser.add_argument("--semantic_batch_size", type=int, default=4,
                        help="Batch size for semantic segmentation.")
