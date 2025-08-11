@@ -104,6 +104,8 @@ def parse_args():
                        help="Target number of points for semantic robust filtering")
     parser.add_argument("--semantic_quality_threshold", type=float, default=2.0,
                        help="Maximum reprojection error for semantic point filtering")
+    parser.add_argument("--quality_only_filtering", action="store_true",
+                       help="Skip semantic segmentation and use quality-only filtering for robust points")
     
     # 3DGS Integration
     parser.add_argument("--copy_to_3dgs_dir", type=str, default=None,

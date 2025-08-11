@@ -25,12 +25,32 @@ class SemanticSegmenter:
         logger.info(f"Initializing SemanticSegmenter on device: {self.device}")
         
         try:
-            self.processor = SegformerImageProcessor.from_pretrained(model_name)
-            self.model = SegformerForSemanticSegmentation.from_pretrained(model_name).to(self.device).eval()
+            logger.info(f"Loading semantic segmentation model: {model_name}")
+            self.processor = SegformerImageProcessor.from_pretrained(model_name, trust_remote_code=True)
+            self.model = SegformerForSemanticSegmentation.from_pretrained(model_name, trust_remote_code=True).to(self.device).eval()
             logger.info(f"Successfully loaded model '{model_name}'")
         except Exception as e:
-            logger.error(f"Failed to load semantic segmentation model: {e}")
-            raise
+            # Try fallback models if the primary model fails
+            fallback_models = [
+                "nvidia/segformer-b0-finetuned-ade-512-512",
+                "nvidia/mit-b0",
+                "facebook/detr-resnet-50-panoptic"  # Last resort fallback
+            ]
+            
+            for fallback_model in fallback_models:
+                if fallback_model != model_name:  # Don't retry the same model
+                    try:
+                        logger.warning(f"Trying fallback model: {fallback_model}")
+                        self.processor = SegformerImageProcessor.from_pretrained(fallback_model)
+                        self.model = SegformerForSemanticSegmentation.from_pretrained(fallback_model).to(self.device).eval()
+                        logger.info(f"Successfully loaded fallback model '{fallback_model}'")
+                        return
+                    except Exception as fallback_error:
+                        logger.warning(f"Fallback model {fallback_model} also failed: {fallback_error}")
+                        continue
+            
+            logger.error(f"Failed to load semantic segmentation model and all fallbacks: {e}")
+            raise Exception("No semantic segmentation model could be loaded")
 
     def segment_image(self, image_path: str) -> np.ndarray:
         """
@@ -76,7 +96,8 @@ class SemanticSegmenter:
             dict[str, np.ndarray]: A dictionary mapping image paths to their semantic maps.
         """
         results = {}
-        for i in tqdm(range(0, len(image_paths), batch_size), desc="Segmenting images"):
+        total_batches = (len(image_paths) + batch_size - 1) // batch_size
+        for i in tqdm(range(0, len(image_paths), batch_size), desc=f"Segmenting {len(image_paths)} images ({total_batches} batches)"):
             batch_paths = image_paths[i:i+batch_size]
             images = [Image.open(p).convert("RGB") for p in batch_paths]
             
@@ -104,6 +125,11 @@ class SemanticSegmenter:
                 for path in batch_paths:
                     results[path] = None # Mark as failed
 
+        # Log final statistics
+        successful = sum(1 for v in results.values() if v is not None)
+        failed = len(results) - successful
+        logger.info(f"Semantic segmentation completed: {successful} successful, {failed} failed out of {len(image_paths)} images")
+        
         return results
 
     def save_masks(self, masks: dict[str, np.ndarray], output_dir: str):

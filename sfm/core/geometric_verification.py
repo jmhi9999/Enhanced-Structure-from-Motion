@@ -97,14 +97,18 @@ class GeometricVerification:
         semantically_verified_matches = {}
         
         for pair_key, match_data in tqdm(matches.items(), desc="Semantic Filtering"):
-            img_path1_str, img_path2_str = pair_key.split('-')
-            
-            # Find the full path from the features dictionary keys
-            img_path1 = next((p for p in features.keys() if Path(p).name == img_path1_str), None)
-            img_path2 = next((p for p in features.keys() if Path(p).name == img_path2_str), None)
+            # Handle both tuple and string keys
+            if isinstance(pair_key, tuple):
+                img_path1, img_path2 = pair_key
+            else:
+                # Fallback for string keys
+                img_path1_str, img_path2_str = pair_key.split('-')
+                # Find the full path from the features dictionary keys
+                img_path1 = next((p for p in features.keys() if Path(p).name == img_path1_str), None)
+                img_path2 = next((p for p in features.keys() if Path(p).name == img_path2_str), None)
 
             if not img_path1 or not img_path2:
-                logger.warning(f"Could not find full image paths for pair {pair_key}")
+                logger.warning(f"Could not find image paths for pair {pair_key}")
                 continue
 
             mask1 = semantic_masks.get(img_path1)

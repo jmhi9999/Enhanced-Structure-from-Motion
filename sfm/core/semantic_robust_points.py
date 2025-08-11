@@ -66,9 +66,10 @@ class SemanticRobustPoints:
         try:
             self.segmenter = SemanticSegmenter(model_name=segmentation_model, device=device)
             self.label_map = self.segmenter.get_label_info()
-            logger.info(f"Loaded segmentation model with {len(self.label_map)} classes")
+            logger.info(f"✅ Loaded segmentation model with {len(self.label_map)} classes")
         except Exception as e:
-            logger.warning(f"Semantic segmentation unavailable: {e}")
+            logger.warning(f"❌ Semantic segmentation unavailable: {e}")
+            logger.warning("Falling back to quality-only filtering (no semantic analysis)")
             self.segmenter = None
             self.label_map = {}
     
