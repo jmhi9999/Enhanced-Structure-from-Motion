@@ -198,7 +198,63 @@ class DenseDepthEstimator:
                 ratio = max_size / max(image.size)
                 new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
                 image = image.resize(new_size, Image.Resampling.LANCZOS)
-                logger.debug(f\"Resized image from {Path(img_path).name} to {new_size}\")\n            \n            # Prepare inputs with error handling\n            try:\n                inputs = self.feature_extractor(images=image, return_tensors=\"pt\")\n                inputs = {k: v.to(self.device) for k, v in inputs.items()}\n            except Exception as e:\n                logger.error(f\"Feature extraction failed for {img_path}: {e}\")\n                return None\n            \n            # Get depth prediction with memory management\n            try:\n                with torch.no_grad():\n                    outputs = self.depth_model(**inputs)\n                    if hasattr(outputs, 'predicted_depth'):\n                        predicted_depth = outputs.predicted_depth\n                    else:\n                        # Fallback for different model outputs\n                        predicted_depth = outputs.prediction if hasattr(outputs, 'prediction') else outputs[0]\n                \n                # Convert to numpy and validate\n                depth_map = predicted_depth.squeeze().cpu().numpy()\n                \n                # Clean up GPU memory immediately\n                del predicted_depth, outputs, inputs\n                if self.device.type == \"cuda\":\n                    torch.cuda.empty_cache()\n                \n                # Validate depth map\n                if depth_map.size == 0 or not np.isfinite(depth_map).any():\n                    logger.warning(f\"Invalid depth map generated for {img_path}\")\n                    return None\n                \n                # Normalize depth to reasonable range (0-50 meters)\n                depth_map = self._normalize_depth_map(depth_map)\n                \n                logger.debug(f\"Generated monocular depth for {Path(img_path).name}: {depth_map.min():.2f}-{depth_map.max():.2f}m\")\n                return depth_map\n                \n            except torch.cuda.OutOfMemoryError:\n                logger.error(f\"GPU memory insufficient for depth estimation on {Path(img_path).name}\")\n                if self.device.type == \"cuda\":\n                    torch.cuda.empty_cache()\n                return None\n            \n            except RuntimeError as e:\n                if \"CUDA\" in str(e):\n                    logger.error(f\"CUDA error during depth estimation for {Path(img_path).name}: {e}\")\n                    if self.device.type == \"cuda\":\n                        torch.cuda.empty_cache()\n                else:\n                    logger.error(f\"Runtime error during depth estimation for {Path(img_path).name}: {e}\")\n                return None\n                \n        except Exception as e:\n            logger.error(f\"Monocular depth estimation failed for {Path(img_path).name}: {e}\")\n            return None"}, {"old_string": "    def _normalize_depth_map(self, depth_map: np.ndarray) -> np.ndarray:\n        \"\"\"Normalize depth map to reasonable range\"\"\"\n        # Remove outliers\n        depth_map = np.clip(depth_map, np.percentile(depth_map, 1), np.percentile(depth_map, 99))\n        \n        # Normalize to 0-100 meter range\n        depth_min, depth_max = depth_map.min(), depth_map.max()\n        if depth_max > depth_min:\n            depth_map = (depth_map - depth_min) / (depth_max - depth_min) * 100.0\n        \n        return depth_map", "new_string": "    def _normalize_depth_map(self, depth_map: np.ndarray) -> np.ndarray:\n        \"\"\"Normalize depth map to reasonable range with robust handling\"\"\"\n        try:\n            # Handle edge cases\n            if depth_map.size == 0:\n                return depth_map\n            \n            # Remove NaN and infinite values\n            depth_map_clean = np.nan_to_num(depth_map, nan=0.0, posinf=50.0, neginf=0.0)\n            \n            # Remove outliers using percentiles\n            valid_depths = depth_map_clean[depth_map_clean > 0]\n            \n            if len(valid_depths) == 0:\n                logger.warning(\"All depth values are zero or invalid\")\n                return depth_map_clean\n            \n            # Use percentile-based clipping to remove outliers\n            p1, p99 = np.percentile(valid_depths, [1, 99])\n            depth_clipped = np.clip(depth_map_clean, 0, p99)\n            \n            # Normalize to 0-50 meter range (more realistic for indoor/outdoor scenes)\n            depth_min, depth_max = depth_clipped.min(), depth_clipped.max()\n            \n            if depth_max > depth_min and depth_max > 0:\n                # Linear normalization to 0-50m range\n                depth_normalized = (depth_clipped - depth_min) / (depth_max - depth_min) * 50.0\n            else:\n                # Fallback: keep original values if normalization fails\n                depth_normalized = depth_clipped\n            \n            # Ensure reasonable depth values\n            depth_normalized = np.clip(depth_normalized, 0.1, 200.0)  # 10cm to 200m range\n            \n            return depth_normalized\n            \n        except Exception as e:\n            logger.warning(f\"Depth normalization failed: {e}, returning original\")\n            return depth_map"}]
+                logger.debug(f"Resized image from {Path(img_path).name} to {new_size}")
+            
+            # Prepare inputs with error handling
+            try:
+                inputs = self.feature_extractor(images=image, return_tensors="pt")
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            except Exception as e:
+                logger.error(f"Feature extraction failed for {img_path}: {e}")
+                return None
+            
+            # Get depth prediction with memory management
+            try:
+                with torch.no_grad():
+                    outputs = self.depth_model(**inputs)
+                    if hasattr(outputs, 'predicted_depth'):
+                        predicted_depth = outputs.predicted_depth
+                    else:
+                        # Fallback for different model outputs
+                        predicted_depth = outputs.prediction if hasattr(outputs, 'prediction') else outputs[0]
+                
+                # Convert to numpy and validate
+                depth_map = predicted_depth.squeeze().cpu().numpy()
+                
+                # Clean up GPU memory immediately
+                del predicted_depth, outputs, inputs
+                if self.device.type == "cuda":
+                    torch.cuda.empty_cache()
+                
+                # Validate depth map
+                if depth_map.size == 0 or not np.isfinite(depth_map).any():
+                    logger.warning(f"Invalid depth map generated for {img_path}")
+                    return None
+                
+                # Normalize depth to reasonable range (0-50 meters)
+                depth_map = self._normalize_depth_map(depth_map)
+                
+                logger.debug(f"Generated monocular depth for {Path(img_path).name}: {depth_map.min():.2f}-{depth_map.max():.2f}m")
+                return depth_map
+                
+            except torch.cuda.OutOfMemoryError:
+                logger.error(f"GPU memory insufficient for depth estimation on {Path(img_path).name}")
+                if self.device.type == "cuda":
+                    torch.cuda.empty_cache()
+                return None
+            
+            except RuntimeError as e:
+                if "CUDA" in str(e):
+                    logger.error(f"CUDA error during depth estimation for {Path(img_path).name}: {e}")
+                    if self.device.type == "cuda":
+                        torch.cuda.empty_cache()
+                else:
+                    logger.error(f"Runtime error during depth estimation for {Path(img_path).name}: {e}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Monocular depth estimation failed for {Path(img_path).name}: {e}")
+            return None
     
     def _normalize_depth_map(self, depth_map: np.ndarray) -> np.ndarray:
         """Normalize depth map to reasonable range with robust handling"""
