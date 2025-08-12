@@ -25,7 +25,6 @@ from sfm.core.gpu_bundle_adjustment import GPUBundleAdjustment
 # Dense depth removed - generates too many points (10M+)
 # from sfm.core.dense_depth import DenseDepthEstimator
 from sfm.core.gpu_vocabulary_tree import GPUVocabularyTree
-from sfm.core.semantic_segmentation import SemanticSegmenter
 from sfm.utils.io_utils import save_colmap_format, load_images, save_features, save_matches
 from sfm.utils.image_utils import resize_image
 
@@ -76,13 +75,6 @@ def parse_args():
     parser.add_argument("--bilateral_filter", action="store_true",
                        help="Apply bilateral filtering to depth maps")
 
-    # Semantic Segmentation
-    parser.add_argument("--use_semantics", action="store_true",
-                       help="Enable semantic segmentation for filtering matches.")
-    parser.add_argument("--semantic_model", type=str, default="nvidia/segformer-b0-finetuned-ade-512-512",
-                       help="Semantic segmentation model to use.")
-    parser.add_argument("--semantic_batch_size", type=int, default=4,
-                       help="Batch size for semantic segmentation.")
     
     # Device and performance
     parser.add_argument("--device", type=str, default="auto",
@@ -99,17 +91,6 @@ def parse_args():
                        help="Enable scale recovery for consistent scene scale")
     
     
-    # Semantic Robust Points (NEW - Recommended for 3DGS)
-    parser.add_argument("--use_semantic_robust_points", action="store_true", default=True,
-                       help="Use semantic segmentation to create robust points3D.bin for 3DGS (recommended)")
-    parser.add_argument("--semantic_quality_threshold", type=float, default=2.0,
-                       help="Maximum reprojection error for semantic point filtering")
-    parser.add_argument("--quality_only_filtering", action="store_true",
-                       help="Skip semantic segmentation and use quality-only filtering for robust points")
-    parser.add_argument("--indoor_mode", action="store_true", default=False,
-                       help="Optimize for indoor scenes (preserve ceiling, furniture focus)")
-    parser.add_argument("--outdoor_mode", action="store_true", default=False,
-                       help="Optimize for outdoor scenes (filter sky, building focus)")
     
     # 3DGS Integration
     parser.add_argument("--copy_to_3dgs_dir", type=str, default=None,
@@ -178,13 +159,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'depth_model': args.depth_model,
             'fusion_weight': getattr(args, 'fusion_weight', 0.7),
             'bilateral_filter': getattr(args, 'bilateral_filter', False),
-            'use_semantics': args.use_semantics,
-            'semantic_model': args.semantic_model,
-            'semantic_batch_size': args.semantic_batch_size,
-            'use_semantic_robust_points': args.use_semantic_robust_points,
-            'semantic_quality_threshold': args.semantic_quality_threshold,
-            'indoor_mode': args.indoor_mode,
-            'outdoor_mode': args.outdoor_mode,
             'copy_to_3dgs_dir': args.copy_to_3dgs_dir,
             'scale_recovery': args.scale_recovery,
             'high_quality': args.high_quality,
@@ -210,7 +184,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info(f"Feature extractor: {kwargs.get('feature_extractor', 'superpoint')}")
     logger.info(f"GPU brute force matching: {kwargs.get('use_brute_force', True)}")
     logger.info(f"High quality mode: {kwargs.get('high_quality', False)}")
-    logger.info(f"Use semantics: {kwargs.get('use_semantics', False)}")
 
     # Performance tracking
     start_time = time.time()
@@ -232,48 +205,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     stage_times['preprocessing'] = time.time() - stage_start
     logger.info(f"Preprocessing completed in {stage_times['preprocessing']:.2f}s")
 
-    # Stage 1.5: Semantic Segmentation
-    semantic_masks = None
-    if kwargs.get('use_semantics', False):
-        logger.info("Stage 1.5: Semantic Segmentation...")
-        stage_start = time.time()
-        
-        mask_output_dir = output_path / "semantic_masks"
-        mask_output_dir.mkdir(exist_ok=True)
-        
-        # Caching: Check if all masks already exist
-        all_masks_exist = True
-        for img_path in image_paths:
-            mask_path = mask_output_dir / f"{Path(img_path).name}.png"
-            if not mask_path.exists():
-                all_masks_exist = False
-                break
-        
-        if all_masks_exist:
-            logger.info("Found existing semantic masks for all images, loading them.")
-            semantic_masks = {}
-            for img_path in tqdm(image_paths, desc="Loading semantic masks"):
-                mask_path = mask_output_dir / f"{Path(img_path).name}.png"
-                mask = np.array(Image.open(mask_path))
-                semantic_masks[img_path] = mask
-        else:
-            logger.info("Running semantic segmentation model...")
-            segmenter = SemanticSegmenter(
-                model_name=kwargs.get('semantic_model', 'nvidia/segformer-b0-finetuned-ade-512-512'),
-                device=device
-            )
-            semantic_masks = segmenter.segment_images_batch(
-                image_paths, 
-                batch_size=kwargs.get('semantic_batch_size', 4)
-            )
-            segmenter.save_masks(semantic_masks, str(mask_output_dir))
-            
-            # Log label info for user reference
-            label_info = segmenter.get_label_info()
-            logger.info(f"Semantic labels: {label_info}")
-
-        stage_times['semantic_segmentation'] = time.time() - stage_start
-        logger.info(f"Semantic segmentation completed in {stage_times['semantic_segmentation']:.2f}s")
     
     # Stage 2: Feature extraction
     logger.info("Stage 2: Extracting features...")
@@ -458,20 +389,10 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         stage_times['feature_matching'] = time.time() - stage_start
         logger.info(f"Feature matching completed in {stage_times['feature_matching']:.2f}s")
     
-    # Stage 5: Semantic Match Filtering
+    # Stage 5: Use matches directly without semantic filtering
     verified_matches = matches
-    if kwargs.get('use_semantics', False) and semantic_masks is not None:
-        logger.info("Stage 5: Applying semantic filtering to matches...")
-        stage_start = time.time()
-        
-        verifier = GeometricVerification()
-        verified_matches = verifier.filter_by_semantics(matches, features, semantic_masks)
-        
-        stage_times['semantic_filtering'] = time.time() - stage_start
-        logger.info(f"Semantic filtering completed in {stage_times['semantic_filtering']:.2f}s")
-    else:
-        logger.info("Stage 5: Skipping semantic filtering.")
-        stage_times['semantic_filtering'] = 0.0
+    logger.info("Stage 5: Using matches directly without semantic filtering.")
+    stage_times['semantic_filtering'] = 0.0
 
     # Stage 6: COLMAP-based SfM reconstruction using binary (avoid pycolmap CUDA issues)
     logger.info("Stage 6: COLMAP-based SfM reconstruction using binary...")
@@ -485,7 +406,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     
     sparse_points, cameras, images = colmap_binary_reconstruction(
         features=features,
-        matches=verified_matches,  # Use semantically (and optionally geometrically) verified matches
+        matches=verified_matches,  # Use verified matches
         output_path=output_path,
         image_dir=image_dir
     )
@@ -516,70 +437,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         stage_times['bundle_adjustment'] = time.time() - stage_start
         logger.info(f"Bundle adjustment completed in {stage_times['bundle_adjustment']:.2f}s")
     
-    # Stage 7.5: Semantic Robust Points3D for 3DGS (NEW - Recommended approach)
-    if kwargs.get('use_semantic_robust_points', True):
-        logger.info("Stage 7.5: Creating semantic-robust points3D.bin for 3DGS...")
-        stage_start = time.time()
-        
-        try:
-            from sfm.core.semantic_robust_points import SemanticRobustPoints
-            
-            # Create robust sparse directory
-            robust_sparse_dir = output_path / "sparse_robust" / "0"
-            robust_sparse_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Copy cameras.bin and images.bin from original sparse reconstruction
-            import shutil
-            original_sparse_dir = output_path / "sparse" / "0"
-            if original_sparse_dir.exists():
-                shutil.copy2(original_sparse_dir / "cameras.bin", robust_sparse_dir / "cameras.bin")
-                shutil.copy2(original_sparse_dir / "images.bin", robust_sparse_dir / "images.bin")
-            
-            # Determine indoor/outdoor mode
-            indoor_mode = None
-            if kwargs.get('indoor_mode', False):
-                indoor_mode = True
-                logger.info("🏠 User specified indoor mode")
-            elif kwargs.get('outdoor_mode', False):
-                indoor_mode = False
-                logger.info("🌳 User specified outdoor mode")
-            # else: auto-detection will be used in create_robust_points3d_bin
-            
-            # Create semantic robust points filter (pass existing semantic masks if available)
-            if kwargs.get('use_semantics', False) and 'semantic_masks' in locals():
-                # Reuse semantic masks from Stage 1
-                logger.info("♻️ Reusing semantic masks from Stage 1 for robust points filtering")
-                semantic_filter = SemanticRobustPoints(device=device, precomputed_masks=semantic_masks, indoor_mode=indoor_mode)
-            else:
-                # Create new semantic filter (will generate masks internally)
-                semantic_filter = SemanticRobustPoints(device=device, indoor_mode=indoor_mode)
-            
-            # Extract image directory from first image path
-            first_image_path = Path(next(iter(features.keys())))
-            image_dir = first_image_path.parent
-            
-            # Generate robust points3D.bin
-            num_robust_points = semantic_filter.create_robust_points3d_bin(
-                colmap_points3d=sparse_points,
-                colmap_images=images,
-                image_dir=image_dir,
-                output_path=robust_sparse_dir / "points3D.bin",
-                quality_threshold=kwargs.get('semantic_quality_threshold', 2.0)
-            )
-            
-            if num_robust_points > 0:
-                logger.info(f"✅ Created robust sparse reconstruction with {num_robust_points} semantic-filtered points")
-                # Update sparse_points for potential downstream use
-                from sfm.core.colmap_binary import read_colmap_binary_results
-                sparse_points, _, _ = read_colmap_binary_results(output_path / "sparse_robust")
-            else:
-                logger.warning("Semantic robust points creation failed, using original sparse reconstruction")
-            
-        except Exception as e:
-            logger.warning(f"Semantic robust points creation failed: {e}, using original sparse reconstruction")
-        
-        stage_times['semantic_robust_points'] = time.time() - stage_start
-        logger.info(f"Semantic robust points completed in {stage_times['semantic_robust_points']:.2f}s")
     
     # Stage 8: Dense depth estimation (REMOVED - generates too many points)
     # Dense reconstruction creates 10M+ points which is excessive for 3DGS
@@ -599,14 +456,10 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             gs_sparse_dir = gs_input_path / "sparse" / "0"
             gs_sparse_dir.mkdir(parents=True, exist_ok=True)
             
-            # Choose source directory - prefer semantic robust if available
-            robust_sparse_dir = output_path / "sparse_robust" / "0"
+            # Use original sparse reconstruction
             original_sparse_dir = output_path / "sparse" / "0"
             
-            if robust_sparse_dir.exists() and kwargs.get('use_semantic_robust_points', True):
-                source_sparse_dir = robust_sparse_dir
-                logger.info("Using semantic-robust sparse reconstruction for 3DGS")
-            elif original_sparse_dir.exists():
+            if original_sparse_dir.exists():
                 source_sparse_dir = original_sparse_dir
                 logger.info("Using original sparse reconstruction for 3DGS")
             else:

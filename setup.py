@@ -36,7 +36,6 @@ setup(
         "numba>=0.58.0",
         "psutil>=5.9.0",
         "h5py>=3.8.0",
-        "transformers>=4.30.0",
         "requests>=2.28.0",
     ],
     extras_require={
