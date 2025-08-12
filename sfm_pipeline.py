@@ -106,6 +106,10 @@ def parse_args():
                        help="Maximum reprojection error for semantic point filtering")
     parser.add_argument("--quality_only_filtering", action="store_true",
                        help="Skip semantic segmentation and use quality-only filtering for robust points")
+    parser.add_argument("--indoor_mode", action="store_true", default=False,
+                       help="Optimize for indoor scenes (preserve ceiling, furniture focus)")
+    parser.add_argument("--outdoor_mode", action="store_true", default=False,
+                       help="Optimize for outdoor scenes (filter sky, building focus)")
     
     # 3DGS Integration
     parser.add_argument("--copy_to_3dgs_dir", type=str, default=None,
@@ -179,6 +183,8 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'semantic_batch_size': args.semantic_batch_size,
             'use_semantic_robust_points': args.use_semantic_robust_points,
             'semantic_quality_threshold': args.semantic_quality_threshold,
+            'indoor_mode': args.indoor_mode,
+            'outdoor_mode': args.outdoor_mode,
             'copy_to_3dgs_dir': args.copy_to_3dgs_dir,
             'scale_recovery': args.scale_recovery,
             'high_quality': args.high_quality,
@@ -529,8 +535,24 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
                 shutil.copy2(original_sparse_dir / "cameras.bin", robust_sparse_dir / "cameras.bin")
                 shutil.copy2(original_sparse_dir / "images.bin", robust_sparse_dir / "images.bin")
             
-            # Create semantic robust points filter
-            semantic_filter = SemanticRobustPoints(device=device)
+            # Determine indoor/outdoor mode
+            indoor_mode = None
+            if kwargs.get('indoor_mode', False):
+                indoor_mode = True
+                logger.info("🏠 User specified indoor mode")
+            elif kwargs.get('outdoor_mode', False):
+                indoor_mode = False
+                logger.info("🌳 User specified outdoor mode")
+            # else: auto-detection will be used in create_robust_points3d_bin
+            
+            # Create semantic robust points filter (pass existing semantic masks if available)
+            if kwargs.get('use_semantics', False) and 'semantic_masks' in locals():
+                # Reuse semantic masks from Stage 1
+                logger.info("♻️ Reusing semantic masks from Stage 1 for robust points filtering")
+                semantic_filter = SemanticRobustPoints(device=device, precomputed_masks=semantic_masks, indoor_mode=indoor_mode)
+            else:
+                # Create new semantic filter (will generate masks internally)
+                semantic_filter = SemanticRobustPoints(device=device, indoor_mode=indoor_mode)
             
             # Extract image directory from first image path
             first_image_path = Path(next(iter(features.keys())))

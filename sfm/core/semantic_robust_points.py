@@ -17,8 +17,12 @@ from .semantic_segmentation import SemanticSegmenter
 
 logger = logging.getLogger(__name__)
 
-# ADE20K class priorities for 3DGS (SegFormer model classes)
-SEMANTIC_PRIORITIES = {
+# Scene type detection keywords
+INDOOR_KEYWORDS = ['room', 'living', 'kitchen', 'bedroom', 'bathroom', 'office', 'indoor', 'interior', 'house', 'apartment']
+OUTDOOR_KEYWORDS = ['street', 'park', 'outdoor', 'exterior', 'landscape', 'building', 'facade', 'city']
+
+# ADE20K class priorities for 3DGS (SegFormer model classes) - OUTDOOR optimized
+OUTDOOR_SEMANTIC_PRIORITIES = {
     # High priority - Structural elements (good for 3DGS)
     'building': {'id': 1, 'weight': 1.0, 'max_points_per_image': 500},
     'wall': {'id': 12, 'weight': 0.9, 'max_points_per_image': 400},
@@ -38,11 +42,48 @@ SEMANTIC_PRIORITIES = {
     'door': {'id': 14, 'weight': 0.5, 'max_points_per_image': 100},
     'person': {'id': 19, 'weight': 0.3, 'max_points_per_image': 50},
     
-    # Filter out - Not useful for 3DGS
+    # Filter out - Not useful for outdoor 3DGS
     'sky': {'id': 2, 'weight': 0.0, 'max_points_per_image': 0},
     'ceiling': {'id': 5, 'weight': 0.1, 'max_points_per_image': 50},
     'water': {'id': 21, 'weight': 0.2, 'max_points_per_image': 50},
 }
+
+# ADE20K class priorities for 3DGS (SegFormer model classes) - INDOOR optimized
+INDOOR_SEMANTIC_PRIORITIES = {
+    # High priority - Indoor structural elements
+    'wall': {'id': 12, 'weight': 1.0, 'max_points_per_image': 600},
+    'ceiling': {'id': 5, 'weight': 0.9, 'max_points_per_image': 500},  # Important for indoor!
+    'floor': {'id': 3, 'weight': 0.9, 'max_points_per_image': 500},
+    'door': {'id': 14, 'weight': 0.8, 'max_points_per_image': 300},
+    'window': {'id': 8, 'weight': 0.7, 'max_points_per_image': 300},
+    
+    # Medium priority - Indoor furniture and objects
+    'furniture': {'id': 31, 'weight': 0.8, 'max_points_per_image': 400},
+    'cabinet': {'id': 67, 'weight': 0.7, 'max_points_per_image': 300},
+    'table': {'id': 15, 'weight': 0.7, 'max_points_per_image': 250},
+    'chair': {'id': 18, 'weight': 0.6, 'max_points_per_image': 200},
+    'bed': {'id': 7, 'weight': 0.7, 'max_points_per_image': 300},
+    'sofa': {'id': 17, 'weight': 0.7, 'max_points_per_image': 300},
+    'shelf': {'id': 22, 'weight': 0.6, 'max_points_per_image': 200},
+    
+    # Lower priority - Less structural but still important
+    'television': {'id': 141, 'weight': 0.5, 'max_points_per_image': 150},
+    'lamp': {'id': 36, 'weight': 0.4, 'max_points_per_image': 100},
+    'book': {'id': 84, 'weight': 0.3, 'max_points_per_image': 100},
+    'picture': {'id': 118, 'weight': 0.4, 'max_points_per_image': 150},
+    
+    # Dynamic elements - lower priority
+    'person': {'id': 19, 'weight': 0.2, 'max_points_per_image': 50},
+    
+    # Rarely relevant indoors
+    'building': {'id': 1, 'weight': 0.3, 'max_points_per_image': 100},
+    'sky': {'id': 2, 'weight': 0.0, 'max_points_per_image': 0},  # Still filter out
+    'tree': {'id': 4, 'weight': 0.2, 'max_points_per_image': 50},
+    'car': {'id': 20, 'weight': 0.1, 'max_points_per_image': 25},
+}
+
+# Default to outdoor priorities for backward compatibility
+SEMANTIC_PRIORITIES = OUTDOOR_SEMANTIC_PRIORITIES
 
 # Fallback for unknown classes
 DEFAULT_CLASS_CONFIG = {'weight': 0.5, 'max_points_per_image': 100}
@@ -55,8 +96,8 @@ QUALITY_THRESHOLDS = {
     'max_total_points': 100000          # Safety limit to prevent memory issues
 }
 
-# Class-specific thresholds for fine-grained filtering
-CLASS_THRESHOLDS = {
+# Class-specific thresholds for fine-grained filtering - OUTDOOR optimized
+OUTDOOR_CLASS_THRESHOLDS = {
     # High priority structural elements - strict quality requirements
     'building': {'min_weight': 0.8, 'max_error': 1.5, 'min_track': 3},
     'wall': {'min_weight': 0.7, 'max_error': 1.2, 'min_track': 3},
@@ -78,43 +119,102 @@ CLASS_THRESHOLDS = {
     
     # Filter out completely - set impossible requirements
     'sky': {'min_weight': 1.0, 'max_error': 0.0, 'min_track': 10},        # Impossible to meet
-    'ceiling': {'min_weight': 0.8, 'max_error': 0.3, 'min_track': 4},     # Very strict
+    'ceiling': {'min_weight': 0.8, 'max_error': 0.3, 'min_track': 4},     # Very strict for outdoor
     'water': {'min_weight': 0.6, 'max_error': 0.4, 'min_track': 3}        # Strict
 }
+
+# Class-specific thresholds for fine-grained filtering - INDOOR optimized
+INDOOR_CLASS_THRESHOLDS = {
+    # High priority indoor structural elements - reasonable requirements
+    'wall': {'min_weight': 0.7, 'max_error': 1.5, 'min_track': 3},
+    'ceiling': {'min_weight': 0.6, 'max_error': 1.2, 'min_track': 3},     # Much more lenient for indoor!
+    'floor': {'min_weight': 0.6, 'max_error': 1.5, 'min_track': 3},
+    'door': {'min_weight': 0.5, 'max_error': 1.0, 'min_track': 2},
+    'window': {'min_weight': 0.4, 'max_error': 1.0, 'min_track': 2},
+    
+    # Indoor furniture - reasonable quality requirements
+    'furniture': {'min_weight': 0.5, 'max_error': 1.0, 'min_track': 2},
+    'cabinet': {'min_weight': 0.4, 'max_error': 1.0, 'min_track': 2},
+    'table': {'min_weight': 0.4, 'max_error': 1.0, 'min_track': 2},
+    'chair': {'min_weight': 0.3, 'max_error': 0.8, 'min_track': 2},
+    'bed': {'min_weight': 0.4, 'max_error': 1.0, 'min_track': 2},
+    'sofa': {'min_weight': 0.4, 'max_error': 1.0, 'min_track': 2},
+    'shelf': {'min_weight': 0.3, 'max_error': 0.8, 'min_track': 2},
+    
+    # Decorative elements - relaxed requirements
+    'television': {'min_weight': 0.3, 'max_error': 0.8, 'min_track': 2},
+    'lamp': {'min_weight': 0.2, 'max_error': 0.6, 'min_track': 2},
+    'book': {'min_weight': 0.2, 'max_error': 0.5, 'min_track': 2},
+    'picture': {'min_weight': 0.2, 'max_error': 0.6, 'min_track': 2},
+    
+    # Dynamic elements - lower priority
+    'person': {'min_weight': 0.1, 'max_error': 0.5, 'min_track': 2},
+    
+    # Rarely relevant indoors - very relaxed or filtered
+    'building': {'min_weight': 0.2, 'max_error': 1.0, 'min_track': 2},
+    'tree': {'min_weight': 0.1, 'max_error': 0.8, 'min_track': 2},
+    'car': {'min_weight': 0.1, 'max_error': 0.5, 'min_track': 2},
+    
+    # Still filter out sky completely
+    'sky': {'min_weight': 1.0, 'max_error': 0.0, 'min_track': 10},        # Impossible to meet
+    'water': {'min_weight': 0.4, 'max_error': 0.6, 'min_track': 2}        # More lenient for indoor water features
+}
+
+# Default to outdoor thresholds for backward compatibility
+CLASS_THRESHOLDS = OUTDOOR_CLASS_THRESHOLDS
 
 
 class SemanticRobustPoints:
     """Generate robust points3D.bin using semantic segmentation filtering"""
     
-    def __init__(self, device: str = "cuda", segmentation_model: str = "nvidia/segformer-b0-finetuned-ade-512-512"):
+    def __init__(self, device: str = "cuda", segmentation_model: str = "nvidia/segformer-b0-finetuned-ade-512-512", precomputed_masks: Dict = None, indoor_mode: bool = False):
         """
         Initialize semantic-aware point filtering
         
         Args:
             device: Device to run segmentation on
             segmentation_model: HuggingFace model name
+            precomputed_masks: Pre-computed semantic masks (to avoid duplicate computation)
+            indoor_mode: Whether to optimize for indoor scenes (ceiling preservation, furniture focus)
         """
         self.device = device
+        self.precomputed_masks = precomputed_masks
+        self.indoor_mode = indoor_mode
         
-        # Initialize semantic segmentation
-        logger.info("Initializing semantic segmentation model...")
-        try:
-            self.segmenter = SemanticSegmenter(model_name=segmentation_model, device=device)
-            self.label_map = self.segmenter.get_label_info()
-            logger.info(f"✅ Loaded segmentation model with {len(self.label_map)} classes")
-        except Exception as e:
-            logger.warning(f"❌ Semantic segmentation unavailable: {e}")
-            logger.warning("Falling back to quality-only filtering (no semantic analysis)")
+        # Set appropriate priorities and thresholds based on mode
+        if indoor_mode:
+            self.semantic_priorities = INDOOR_SEMANTIC_PRIORITIES
+            self.class_thresholds = INDOOR_CLASS_THRESHOLDS
+            logger.info("🏠 Indoor mode: Optimized for ceiling, walls, and furniture")
+        else:
+            self.semantic_priorities = OUTDOOR_SEMANTIC_PRIORITIES
+            self.class_thresholds = OUTDOOR_CLASS_THRESHOLDS
+            logger.info("🌳 Outdoor mode: Optimized for buildings, roads, and vegetation")
+        
+        # Initialize semantic segmentation only if no precomputed masks
+        if precomputed_masks:
+            logger.info("♻️ Using precomputed semantic masks (avoiding duplicate segmentation)")
             self.segmenter = None
-            self.label_map = {}
+            self.label_map = {}  # Will use default mapping
+        else:
+            logger.info("Initializing semantic segmentation model...")
+            try:
+                self.segmenter = SemanticSegmenter(model_name=segmentation_model, device=device)
+                self.label_map = self.segmenter.get_label_info()
+                logger.info(f"✅ Loaded segmentation model with {len(self.label_map)} classes")
+            except Exception as e:
+                logger.warning(f"❌ Semantic segmentation unavailable: {e}")
+                logger.warning("Falling back to quality-only filtering (no semantic analysis)")
+                self.segmenter = None
+                self.label_map = {}
     
     def _get_class_config(self, class_id: int) -> Dict:
         """Get configuration for semantic class"""
         if class_id in self.label_map:
             class_name = self.label_map[class_id].lower()
             
-            # Find best match in priorities
-            for priority_name, config in SEMANTIC_PRIORITIES.items():
+            # Find best match in priorities (using instance-specific priorities)
+            for priority_name, config in self.semantic_priorities.items():
                 if priority_name in class_name or class_name in priority_name:
                     return config
         
@@ -125,8 +225,8 @@ class SemanticRobustPoints:
         if class_id in self.label_map:
             class_name = self.label_map[class_id].lower()
             
-            # Find best match in priorities
-            for priority_name in SEMANTIC_PRIORITIES.keys():
+            # Find best match in priorities (using instance-specific priorities)
+            for priority_name in self.semantic_priorities.keys():
                 if priority_name in class_name or class_name in priority_name:
                     return priority_name
         
@@ -155,9 +255,9 @@ class SemanticRobustPoints:
         if semantic_weight < QUALITY_THRESHOLDS['min_semantic_weight']:
             return False
         
-        # Class-specific checks
-        if class_name in CLASS_THRESHOLDS:
-            thresholds = CLASS_THRESHOLDS[class_name]
+        # Class-specific checks (using instance-specific thresholds)
+        if class_name in self.class_thresholds:
+            thresholds = self.class_thresholds[class_name]
             
             # Check class-specific requirements
             if semantic_weight < thresholds['min_weight']:
@@ -190,7 +290,7 @@ class SemanticRobustPoints:
         Returns:
             Filtered points3D dictionary (keeps all points meeting quality requirements)
         """
-        if not self.segmenter:
+        if not self.segmenter and not self.precomputed_masks:
             logger.warning("No semantic segmentation available, using quality filtering only")
             return self._filter_by_quality_only(points3d, quality_threshold or QUALITY_THRESHOLDS['max_reprojection_error'])
         
@@ -213,8 +313,13 @@ class SemanticRobustPoints:
                 valid_images[str(full_path)] = img_data
                 image_name_to_path[image_name] = str(full_path)
         
-        logger.info(f"Generating semantic masks for {len(image_paths)} images...")
-        semantic_masks = self.segmenter.segment_images_batch(image_paths, batch_size=4)
+        # Use precomputed masks if available, otherwise generate new ones
+        if self.precomputed_masks:
+            logger.info("♻️ Using precomputed semantic masks")
+            semantic_masks = self.precomputed_masks
+        else:
+            logger.info(f"Generating semantic masks for {len(image_paths)} images...")
+            semantic_masks = self.segmenter.segment_images_batch(image_paths, batch_size=4)
         
         # Step 2: Analyze each 3D point's semantic context
         point_scores = {}
@@ -456,12 +561,43 @@ class SemanticRobustPoints:
             return 0
 
 
+def detect_scene_type(image_dir: Path) -> bool:
+    """
+    Automatically detect if scene is indoor or outdoor based on image directory name
+    
+    Args:
+        image_dir: Path to image directory
+        
+    Returns:
+        True if indoor scene detected, False if outdoor
+    """
+    dir_name = str(image_dir).lower()
+    path_parts = [part.lower() for part in image_dir.parts]
+    
+    # Check for indoor keywords in directory path
+    for keyword in INDOOR_KEYWORDS:
+        if any(keyword in part for part in path_parts):
+            logger.info(f"🏠 Indoor scene detected (keyword: '{keyword}')")
+            return True
+    
+    # Check for outdoor keywords in directory path
+    for keyword in OUTDOOR_KEYWORDS:
+        if any(keyword in part for part in path_parts):
+            logger.info(f"🌳 Outdoor scene detected (keyword: '{keyword}')")
+            return False
+    
+    # Default to outdoor if uncertain
+    logger.info("🤔 Scene type uncertain, defaulting to outdoor mode")
+    return False
+
+
 def create_semantic_robust_points3d(
     sparse_dir: Path,
     image_dir: Path,
     output_dir: Path,
     quality_threshold: float = None,
-    device: str = "cuda"
+    device: str = "cuda",
+    indoor_mode: bool = None
 ) -> bool:
     """
     Main function to create quality-based semantic-robust points3D.bin
@@ -472,11 +608,16 @@ def create_semantic_robust_points3d(
         output_dir: Output directory for robust points3D.bin
         quality_threshold: Optional override for max reprojection error (uses QUALITY_THRESHOLDS if None)
         device: Device for semantic segmentation
+        indoor_mode: Override for indoor/outdoor mode (None for auto-detection)
         
     Returns:
         Success status
     """
     try:
+        # Auto-detect scene type if not specified
+        if indoor_mode is None:
+            indoor_mode = detect_scene_type(image_dir)
+        
         # Read COLMAP data
         from .colmap_binary import read_colmap_binary_results
         
@@ -486,8 +627,8 @@ def create_semantic_robust_points3d(
             logger.error("No COLMAP 3D points found")
             return False
         
-        # Create semantic robust points
-        semantic_filter = SemanticRobustPoints(device=device)
+        # Create semantic robust points with appropriate mode
+        semantic_filter = SemanticRobustPoints(device=device, indoor_mode=indoor_mode)
         
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
