@@ -6,13 +6,6 @@ Core SfM components
 from .feature_extractor import FeatureExtractor
 from .feature_matcher import FeatureMatcher
 from .geometric_verification import GeometricVerification
-# Dense depth - optional import to avoid transformer dependency issues
-try:
-    from .dense_depth import DenseDepthEstimator
-    DENSE_DEPTH_AVAILABLE = True
-except (ImportError, TypeError, AttributeError):
-    DENSE_DEPTH_AVAILABLE = False
-    DenseDepthEstimator = None
 from .scale_recovery import ScaleRecovery
 
 # GPU modules - optional imports
@@ -55,12 +48,6 @@ def bundle_adjustment(points3d, cameras, config=None):
     return ba.optimize(points3d, cameras)
 
 
-def estimate_dense_depth(images, config=None):
-    """Estimate dense depth maps"""
-    if not DENSE_DEPTH_AVAILABLE:
-        raise ImportError("Dense depth estimation not available. Install with: pip install transformers")
-    depth_estimator = DenseDepthEstimator(config or {})
-    return depth_estimator.estimate(images)
 
 def recover_scale(points3d, depth_maps, config=None):
     """Recover scale from depth maps"""
@@ -83,8 +70,6 @@ __all__ = [
 ]
 
 # Add optional modules if available
-if DENSE_DEPTH_AVAILABLE:
-    __all__.extend(["DenseDepthEstimator", "estimate_dense_depth"])
 
 # Add GPU classes if available
 if GPU_BA_AVAILABLE:

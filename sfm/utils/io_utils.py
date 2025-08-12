@@ -10,7 +10,7 @@ import pickle
 
 
 def save_colmap_format(output_dir: str, cameras: Dict, images: Dict, 
-                      points3d: Dict, dense_depth_maps: Dict[str, np.ndarray] = None):
+                      points3d: Dict):
     """Save SfM results in COLMAP format"""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -24,9 +24,6 @@ def save_colmap_format(output_dir: str, cameras: Dict, images: Dict,
     # Save points3D.bin
     save_points3d_bin(output_path / "points3D.bin", points3d)
     
-    # Save dense depth maps if provided
-    if dense_depth_maps:
-        save_dense_depth_maps(output_path / "depth_maps", dense_depth_maps)
     
     # Save reconstruction info
     save_reconstruction_info(output_path / "reconstruction_info.json", 
@@ -176,16 +173,6 @@ def save_points3d_bin(filepath: Path, points3d: Dict):
                 f.write(point2d_id_int.to_bytes(4, byteorder='little'))
 
 
-def save_dense_depth_maps(output_dir: Path, depth_maps: Dict[str, np.ndarray]):
-    """Save dense depth maps"""
-    output_dir.mkdir(exist_ok=True)
-    
-    for img_path, depth_map in depth_maps.items():
-        # Get image name
-        img_name = Path(img_path).stem
-        
-        # Save as numpy array
-        np.save(output_dir / f"{img_name}_depth.npy", depth_map)
         
         # Save as normalized image for visualization
         depth_normalized = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min() + 1e-8)

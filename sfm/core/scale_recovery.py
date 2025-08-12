@@ -674,12 +674,8 @@ class ScaleRecovery:
                                            cameras: Dict, images: Dict) -> Optional[float]:
         """Estimate scale from monocular depth using DPT integration"""
         
-        try:
-            # Import DPT depth estimator
-            from sfm.core.dense_depth import DenseDepthEstimator
-        except ImportError:
-            logger.warning("DenseDepthEstimator not available for monocular depth scale estimation")
-            return None
+        logger.warning("Dense depth estimation removed - monocular depth scale estimation not available")
+        return None
         
         if len(images) < 3:
             logger.warning("Insufficient images for monocular depth scale estimation")

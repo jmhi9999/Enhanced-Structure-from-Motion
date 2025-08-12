@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced SfM Pipeline for 3D Gaussian Splatting
-Optimized for high-quality camera poses and dense reconstruction
+Optimized for high-quality camera poses and semantic robust points
 """
 
 import argparse
@@ -22,7 +22,8 @@ from sfm.core.feature_extractor import FeatureExtractorFactory
 from sfm.core.feature_matcher import EnhancedLightGlueMatcher
 from sfm.core.geometric_verification import GeometricVerification, RANSACMethod
 from sfm.core.gpu_bundle_adjustment import GPUBundleAdjustment
-from sfm.core.dense_depth import DenseDepthEstimator
+# Dense depth removed - generates too many points (10M+)
+# from sfm.core.dense_depth import DenseDepthEstimator
 from sfm.core.gpu_vocabulary_tree import GPUVocabularyTree
 from sfm.core.semantic_segmentation import SemanticSegmenter
 from sfm.utils.io_utils import save_colmap_format, load_images, save_features, save_matches
@@ -110,7 +111,7 @@ def parse_args():
     
     # 3DGS Integration
     parser.add_argument("--copy_to_3dgs_dir", type=str, default=None,
-                       help="Directory to copy COLMAP sparse files and dense point cloud for 3D Gaussian Splatting")
+                       help="Directory to copy COLMAP sparse files for 3D Gaussian Splatting")
     
     # Profiling
     parser.add_argument("--profile", action="store_true",
@@ -562,31 +563,10 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         stage_times['semantic_robust_points'] = time.time() - stage_start
         logger.info(f"Semantic robust points completed in {stage_times['semantic_robust_points']:.2f}s")
     
-    # Stage 8: Dense depth estimation (for 3DGS)
-    if kwargs.get('use_monocular_depth', False):
-        logger.info("Stage 8: Dense depth estimation...")
-        stage_start = time.time()
-        
-        dense_estimator = DenseDepthEstimator(
-            device=device,
-            depth_model=kwargs.get('depth_model', 'dpt-large'),
-            high_quality=kwargs.get('high_quality', True)
-        )
-        
-        dense_depth_maps = dense_estimator.estimate_dense_depth(
-            sparse_points=sparse_points,
-            cameras=cameras,
-            images=images,
-            features=features
-        )
-        
-        # Save dense depth maps
-        depth_dir = output_path / "depth_maps"
-        depth_dir.mkdir(exist_ok=True)
-        dense_estimator.save_depth_maps(dense_depth_maps, str(depth_dir))
-        
-        stage_times['dense_depth'] = time.time() - stage_start
-        logger.info(f"Dense depth estimation completed in {stage_times['dense_depth']:.2f}s")
+    # Stage 8: Dense depth estimation (REMOVED - generates too many points)
+    # Dense reconstruction creates 10M+ points which is excessive for 3DGS
+    # Use semantic robust points instead for optimal 3DGS training
+    logger.info("Stage 8: Dense depth estimation skipped (use semantic robust points instead)")
         
             
     # Stage 9: Copy reconstruction files for 3DGS compatibility
@@ -707,7 +687,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         'cameras': cameras,
         'images': images,
         'features': features,
-        'dense_depth_maps': dense_depth_maps if kwargs.get('use_monocular_depth', False) else None,
         'scale_info': scale_recovery.get_scale_info() if kwargs.get('scale_recovery', False) else None,
         'total_time': total_time,
         'stage_times': stage_times

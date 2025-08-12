@@ -36,11 +36,6 @@ class QualityMetrics3DGS:
                 reconstruction_data['sparse_points']
             ))
         
-        # Depth map evaluation
-        if 'dense_depth_maps' in reconstruction_data:
-            metrics.update(self._evaluate_depth_maps(
-                reconstruction_data['dense_depth_maps']
-            ))
         
         # Overall quality score
         metrics['overall_quality'] = self._calculate_overall_quality(metrics)
