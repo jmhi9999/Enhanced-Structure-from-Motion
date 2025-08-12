@@ -503,12 +503,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         stage_times['bundle_adjustment'] = time.time() - stage_start
         logger.info(f"Bundle adjustment completed in {stage_times['bundle_adjustment']:.2f}s")
     
-    
-    # Stage 8: Dense depth estimation (REMOVED - generates too many points)
-    # Dense reconstruction creates 10M+ points which is excessive for 3DGS
-    # Use semantic robust points instead for optimal 3DGS training
-    logger.info("Stage 8: Dense depth estimation skipped (use semantic robust points instead)")
-        
             
     # Stage 9: Copy reconstruction files for 3DGS compatibility
     gs_input_dir = kwargs.get('copy_to_3dgs_dir')
@@ -595,7 +589,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         output_dir=str(colmap_dir)
     )
     
-    # Note: 3dgs_data.pkl generation removed - COLMAP standard output is sufficient for most 3DGS implementations
     
     stage_times['saving'] = time.time() - stage_start
     logger.info(f"Saving completed in {stage_times['saving']:.2f}s")
