@@ -102,8 +102,6 @@ def parse_args():
     # Semantic Robust Points (NEW - Recommended for 3DGS)
     parser.add_argument("--use_semantic_robust_points", action="store_true", default=True,
                        help="Use semantic segmentation to create robust points3D.bin for 3DGS (recommended)")
-    parser.add_argument("--semantic_target_points", type=int, default=20000,
-                       help="Target number of points for semantic robust filtering")
     parser.add_argument("--semantic_quality_threshold", type=float, default=2.0,
                        help="Maximum reprojection error for semantic point filtering")
     parser.add_argument("--quality_only_filtering", action="store_true",
@@ -180,7 +178,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'semantic_model': args.semantic_model,
             'semantic_batch_size': args.semantic_batch_size,
             'use_semantic_robust_points': args.use_semantic_robust_points,
-            'semantic_target_points': args.semantic_target_points,
             'semantic_quality_threshold': args.semantic_quality_threshold,
             'copy_to_3dgs_dir': args.copy_to_3dgs_dir,
             'scale_recovery': args.scale_recovery,
@@ -545,7 +542,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
                 colmap_images=images,
                 image_dir=image_dir,
                 output_path=robust_sparse_dir / "points3D.bin",
-                target_points=kwargs.get('semantic_target_points', 20000),
                 quality_threshold=kwargs.get('semantic_quality_threshold', 2.0)
             )
             

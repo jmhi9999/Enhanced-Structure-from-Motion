@@ -173,13 +173,6 @@ def save_points3d_bin(filepath: Path, points3d: Dict):
                 f.write(point2d_id_int.to_bytes(4, byteorder='little'))
 
 
-        
-        # Save as normalized image for visualization
-        depth_normalized = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min() + 1e-8)
-        depth_uint8 = (depth_normalized * 255).astype(np.uint8)
-        
-        import cv2
-        cv2.imwrite(str(output_dir / f"{img_name}_depth.png"), depth_uint8)
 
 
 def save_reconstruction_info(filepath: Path, cameras: Dict, images: Dict, points3d: Dict):
