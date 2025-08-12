@@ -1,53 +1,50 @@
-# 🚀 Enhanced SfM Pipeline for 3D Gaussian Splatting
+# Enhanced SfM Pipeline for 3D Gaussian Splatting
 
-**High-quality camera poses and dense reconstruction for 3DGS** - Optimized for 3D Gaussian Splatting with GPU acceleration
+**High-performance Structure-from-Motion pipeline optimized for 3D Gaussian Splatting** - GPU-accelerated with semantic awareness and modern computer vision algorithms
 
-## 🎯 Performance Highlights
+## Performance Highlights
 
 - **5-10x FASTER** than hloc on large datasets
 - **O(n log n)** complexity vs hloc's O(n²) brute force matching  
 - **60% less memory usage** with intelligent batch processing
 - **GPU-accelerated** bundle adjustment with PyCeres
-- **Advanced MAGSAC** with CUDA optimization
-- **Monocular depth estimation** with DPT model
+- **Semantic-aware** feature matching for improved accuracy
 - **Scale recovery** for consistent scene scale
 
-## 🔥 Key Innovations for 3DGS
+## Key Features
 
-### 1. **GPU Vocabulary Tree** 
-- FAISS-powered O(n log n) image retrieval vs hloc's O(n²)
-- Hierarchical clustering for instant similar image finding
+### 1. **Modern Feature Extraction**
+- SuperPoint, ALIKED, and DISK support
+- GPU batch processing for efficiency
+- Configurable keypoint limits and quality thresholds
+
+### 2. **Smart Pair Selection**
+- FAISS-powered O(n log n) vocabulary tree
+- Hierarchical clustering for similar image finding
 - Memory-efficient caching and batch processing
+- Pair selections are done in brute-force in default
 
-### 2. **GPU Bundle Adjustment**
+### 3. **Semantic-Aware Matching**
+- SegFormer-based semantic segmentation
+- Filters matches based on semantic consistency
+- Reduces false matches between different object types
+
+### 4. **GPU Bundle Adjustment**
 - PyCeres with CUDA acceleration 
 - Parallel residual computation
-- Memory pooling for 3x faster optimization
+- Memory pooling for faster optimization
 
-### 3. **Advanced MAGSAC**
-- CUDA kernel-based hypothesis generation
-- Progressive sampling with adaptive thresholds
+### 5. **Advanced Geometric Verification**
+- cv2.USAC_MAGSAC with adaptive thresholds
+- Progressive sampling for robust estimation
 - Multi-model fitting capability
 
-### 4. **Monocular Depth Estimation**
-- DPT-Large model integration
-- Scale recovery from sparse SfM points
-- Geometry completion for texture-poor regions
-
-### 5. **Scale Recovery**
+### 6. **Scale Recovery**
 - Global scale consistency for 3DGS
-- Monocular depth scale estimation
 - Multi-view consistency validation
+- Automatic scale detection and correction
 
-## 📊 Benchmark Results
-
-| Dataset Size | hloc Time | Enhanced SfM | Speedup | Memory Saved |
-|-------------|-----------|--------------|---------|--------------|
-| 100 images  | 180s      | 35s          | **5.1x** | 1.2 GB       |
-| 500 images  | 1200s     | 140s         | **8.6x** | 3.5 GB       |
-| 1000 images | 4800s     | 420s         | **11.4x** | 8.2 GB       |
-
-## 🛠 Installation
+## Installation
 
 ### Quick Install
 ```bash
@@ -55,244 +52,255 @@
 git clone https://github.com/your-repo/Enhanced-Structure-from-Motion
 cd Enhanced-Structure-from-Motion
 
-# Run installation script
-chmod +x install.sh
-./install.sh
-
-# Activate environment
-source activate_env.sh
-```
-
-### Manual Install
-```bash
-# Create virtual environment
-python3 -m venv enhanced_sfm_env
-source enhanced_sfm_env/bin/activate
-
 # Install dependencies
 pip install -r requirements.txt
 
-# For CUDA support (recommended)
+# For GPU support (recommended)
 pip install cupy-cuda12x faiss-gpu pyceres
 ```
 
-## 🚀 Quick Start
-
-### 1. High-Level API (Recommended)
-```python
-from enhanced_sfm import quick_sfm, high_quality_sfm
-
-# Quick processing
-results = quick_sfm("data/images", "results/quick")
-
-# High-quality processing for 3DGS
-results = high_quality_sfm("data/images", "results/high_quality")
-```
-
-### 2. Core Functions (hloc-style)
-```python
-from sfm import extract_features, match_features, reconstruct_3d
-
-# Extract features
-features = extract_features(["image1.jpg", "image2.jpg"])
-
-# Match features  
-matches = match_features(features)
-
-# 3D reconstruction
-reconstruction = reconstruct_3d(features, matches)
-```
-
-### 3. Command Line Interface
+### COLMAP Binary Installation
 ```bash
-# Basic SfM for 3DGS
-python sfm_pipeline.py \
-  --input_dir data/images \
-  --output_dir results \
-  --feature_extractor superpoint \
-  --use_gpu_ba \
-  --use_monocular_depth
+# Ubuntu/Debian
+sudo apt install colmap
+
+# macOS
+brew install colmap
+
+# Or download from: https://colmap.github.io/install.html
 ```
 
-### 4. High-Quality Mode for 3DGS
+### Environment Setup for CUDA
+```bash
+export CUDA_HOME=/usr/local/cuda-12.2
+export LD_LIBRARY_PATH=/usr/local/cuda-12.2/lib64:$LD_LIBRARY_PATH
+```
+
+## Quick Start
+
+### Basic SfM Reconstruction
 ```bash
 python sfm_pipeline.py \
-  --input_dir data/images \
-  --output_dir results \
-  --feature_extractor superpoint \
+  --input_dir path/to/images \
+  --output_dir path/to/output \
+  --feature_extractor superpoint
+```
+
+### High-Quality Mode for 3D Gaussian Splatting
+```bash
+python sfm_pipeline.py \
+  --input_dir path/to/images \
+  --output_dir path/to/output \
+  --high_quality \
   --use_gpu_ba \
   --use_vocab_tree \
-  --use_monocular_depth \
-  --high_quality \
-  --scale_recovery \
-  --profile
+  --scale_recovery
 ```
 
-## ⚡ Performance Features
+### With Semantic Segmentation
+```bash
+python sfm_pipeline.py \
+  --input_dir path/to/images \
+  --output_dir path/to/output \
+  --use_semantics \
+  --semantic_model nvidia/segformer-b0-finetuned-ade-512-512
+```
 
-### Intelligent Pair Selection
-- **Vocabulary Tree**: O(n log n) vs O(n²) matching
-- **TF-IDF scoring** for semantic similarity
-- **Spatial verification** for geometric consistency
+### 3DGS-Ready Output
+```bash
+python sfm_pipeline.py \
+  --input_dir path/to/images \
+  --output_dir path/to/output \
+  --copy_to_3dgs_dir /path/to/gaussian-splatting/data/scene
+```
+
+## Pipeline Architecture
+
+```
+Enhanced SfM Pipeline
+├── Image Preprocessing → sfm/utils/image_utils.py
+├── Feature Extraction → sfm/core/feature_extractor.py (SuperPoint/ALIKED/DISK)
+├── Smart Pair Selection → sfm/core/gpu_vocabulary_tree.py (FAISS-powered O(n log n))
+├── Feature Matching → sfm/core/feature_matcher.py (LightGlue + GPU brute force fallback)
+├── Semantic Segmentation → sfm/core/semantic_segmentation.py (SegFormer for semantic filtering)
+├── Geometric Verification → sfm/core/geometric_verification.py (cv2.USAC_MAGSAC)
+├── SfM Reconstruction → sfm/core/colmap_binary.py (COLMAP binary execution)
+├── Bundle Adjustment → sfm/core/gpu_bundle_adjustment.py (PyCeres GPU acceleration)
+├── Scale Recovery → sfm/core/scale_recovery.py (3DGS consistency)
+└── COLMAP Output → 3DGS Ready
+```
+
+## Configuration Options
+
+### Feature Extraction
+```bash
+--feature_extractor superpoint     # SuperPoint, ALIKED, or DISK
+--max_image_size 1600              # Maximum image size for processing
+--max_keypoints 4096               # Maximum keypoints per image
+```
+
+### Pair Selection and Matching
+```bash
+--use_vocab_tree                   # Enable O(n log n) vocabulary tree
+--use_brute_force                  # GPU brute force matching (default)
+--max_pairs_per_image 20           # Maximum pairs per image for vocab tree
+--max_total_pairs 10000            # Maximum total pairs for brute force
+```
+
+### Semantic Segmentation
+```bash
+--use_semantics                    # Enable semantic segmentation
+--semantic_model nvidia/segformer-b0-finetuned-ade-512-512
+--semantic_batch_size 4            # Batch size for segmentation
+```
 
 ### GPU Acceleration
-- **CUDA kernels** for hypothesis generation
-- **CuPy arrays** for fast matrix operations  
-- **Memory pooling** to avoid allocation overhead
-- **Batch processing** for optimal GPU utilization
-
-### Memory Optimization
-- **Progressive sampling** to reduce memory footprint
-- **Lazy loading** of image data
-- **Garbage collection** after each pipeline stage
-- **Memory monitoring** with psutil
-
-### Depth Estimation for 3DGS
-- **DPT-Large model** for monocular depth
-- **Scale recovery** from sparse SfM points
-- **Geometry completion** for texture-poor regions
-- **Bilateral filtering** for smooth results
-
-## 🏗 Architecture for 3DGS
-
-```
-Enhanced SfM Pipeline for 3DGS
-├── 🎯 Feature Extraction (SuperPoint/ALIKED/DISK)
-├── 🌳 Vocabulary Tree (FAISS GPU)
-├── 🔗 Smart Pair Selection (O(n log n))
-├── ⚡ Parallel Feature Matching (LightGlue)
-├── 🧮 Advanced MAGSAC (CUDA)
-├── 📐 Incremental SfM (Robust)
-├── 🔧 GPU Bundle Adjustment (PyCeres)
-├── 🏔 Dense Reconstruction (DPT + SfM)
-├── 📏 Scale Recovery (3DGS Consistency)
-└── 💾 COLMAP Output (3DGS Ready)
-```
-
-**Single Session → 3DGS Ready**
-
-## 📈 Technical Improvements
-
-### vs hloc Feature Matching
-- **hloc**: O(n²) brute force all-pairs matching
-- **Ours**: O(n log n) vocabulary tree retrieval
-- **Result**: 5-10x faster on large datasets
-
-### vs OpenCV Bundle Adjustment  
-- **OpenCV**: CPU-only Levenberg-Marquardt
-- **Ours**: GPU-accelerated sparse Schur complement
-- **Result**: 3-5x faster convergence
-
-### vs Standard MAGSAC
-- **Standard**: Sequential hypothesis testing
-- **Ours**: Parallel GPU batch evaluation
-- **Result**: 2-3x faster robust estimation
-
-### vs Basic Depth Estimation
-- **Basic**: Simple interpolation
-- **Ours**: DPT model + SfM fusion
-- **Result**: Higher quality dense reconstruction
-
-## 🔧 Configuration Options for 3DGS
-
 ```bash
-# Vocabulary tree parameters
---use_vocab_tree          # Enable O(n log n) matching
---max_pairs_per_image 20  # Limit pairs per image
-
-# GPU acceleration  
---use_gpu_ba              # GPU bundle adjustment
---device cuda             # Force GPU usage
-
-# Quality settings for 3DGS
---high_quality            # Enable high-quality mode
---scale_recovery          # Enable scale recovery
---use_monocular_depth     # Enable DPT depth model
-
-# Performance tuning
---batch_size 32           # Feature extraction batch size
---num_workers 8           # Parallel matching workers
---profile                 # Enable performance monitoring
+--use_gpu_ba                       # GPU bundle adjustment
+--device cuda                      # Force GPU usage
+--ba_max_iterations 200            # Maximum BA iterations
 ```
 
-## 📋 Requirements
+### Quality Settings
+```bash
+--high_quality                     # Enable high-quality mode
+--scale_recovery                   # Enable scale recovery
+--profile                          # Enable performance profiling
+```
 
-### Minimum Requirements
+### 3DGS Integration
+```bash
+--copy_to_3dgs_dir /path/to/3dgs    # Copy results for 3DGS training
+```
+
+## Semantic Segmentation Usage
+
+The pipeline supports semantic-aware feature matching using SegFormer models:
+
+### How It Works
+1. **Segmentation**: Each image is segmented using a SegFormer model
+2. **Label Extraction**: Semantic labels are extracted at keypoint locations
+3. **Consistency Filtering**: Only matches between keypoints with identical semantic labels are kept
+4. **Caching**: Semantic masks are cached to avoid recomputation
+
+### Benefits
+- **Reduced False Matches**: Eliminates matches between different object types
+- **Improved Accuracy**: Better camera pose estimation through semantic consistency
+- **Flexible Models**: Supports any HuggingFace SegFormer model
+- **Automatic Caching**: Masks are saved and reused across runs
+
+### Example Usage
+```python
+from sfm.core.semantic_segmentation import SemanticSegmenter
+
+# Create segmenter
+segmenter = SemanticSegmenter(
+    model_name="nvidia/segformer-b0-finetuned-ade-512-512",
+    device="cuda"
+)
+
+# Segment images
+masks = segmenter.segment_images_batch(image_paths, batch_size=4)
+
+# Save masks for later use
+segmenter.save_masks(masks, "output/semantic_masks")
+```
+
+## Performance Optimization
+
+### Vocabulary Tree vs Brute Force
+- **Small datasets (<100 images)**: Use brute force matching
+- **Large datasets (>500 images)**: Use vocabulary tree for O(n log n) complexity
+- **Memory constrained**: Enable vocabulary tree to reduce memory usage
+
+### GPU Memory Management
+- **Batch size**: Reduce if GPU memory is limited
+- **Image size**: Lower max_image_size for memory savings
+- **Progressive sampling**: Automatically enabled for large datasets
+
+### COLMAP Integration Strategy
+The pipeline uses COLMAP binary execution by default to avoid CUDA library conflicts:
+- **colmap_binary.py**: Direct binary execution (recommended)
+- **colmap_wrapper.py**: Safe pycolmap wrapper with fallback
+- **colmap_reconstruction.py**: Full pycolmap integration
+
+## Requirements
+
+### Core Dependencies
 - Python 3.8+
 - PyTorch 2.0+
 - OpenCV 4.8+
 - NumPy 1.24+
+- COLMAP binary (must be in PATH)
 
-### Recommended (for full performance)
+### GPU Performance (Optional)
 - CUDA 11.8+ with compatible GPU
-- 16+ GB RAM
-- SSD storage for datasets
-- cuDNN 8.0+
+- cupy-cuda12x>=12.0.0
+- faiss-gpu>=1.7.0
+- pyceres>=0.1.0
 
-### GPU Dependencies
-```bash
-# NVIDIA CUDA Toolkit
-pip install cupy-cuda12x      # GPU array processing
-pip install faiss-gpu         # Fast similarity search  
-pip install pyceres           # GPU bundle adjustment
-pip install numba             # JIT compilation
-```
+### Semantic Segmentation
+- transformers>=4.30.0
+- accelerate>=0.25.0 (for faster model loading)
 
-## 🔍 Profiling & Monitoring
+## Output Formats
 
-Enable detailed performance profiling:
-```bash
-python sfm_pipeline.py --profile --input_dir data/ --output_dir results/
-```
+### COLMAP Format (3DGS Compatible)
+- `sparse/0/cameras.bin` - Camera intrinsics
+- `sparse/0/images.bin` - Camera poses
+- `sparse/0/points3D.bin` - 3D point cloud
 
-Output includes:
-- ⏱️ **Timing breakdown** by pipeline stage
-- 💾 **Memory usage** throughout processing  
-- 🎯 **Vocabulary tree** build/query statistics
-- 🔧 **Bundle adjustment** iteration details
-- 📊 **Feature matching** pair selection efficiency
-- 🏔️ **Depth estimation** quality metrics
+### Additional Outputs
+- `features.h5` - Extracted features
+- `matches.h5` - Feature matches
+- `semantic_masks/` - Semantic segmentation masks (if enabled)
+- `sfm_pipeline.log` - Detailed processing log
 
-## 🧪 Testing & Validation
-
-### Check Requirements
-```bash
-python check_requirements.py
-```
+## Testing and Validation
 
 ### Run Tests
 ```bash
 pytest tests/ -v
 ```
 
-### Benchmark Performance
+### Code Formatting
+```bash
+black sfm/
+flake8 sfm/
+```
+
+### Performance Benchmarking
 ```bash
 python benchmark_comparison.py --dataset data/test_images --output benchmark_results
 ```
 
-## 📊 Output Formats for 3DGS
+## Known Issues and Solutions
 
-### COLMAP Format
-- `cameras.bin` - Camera parameters
-- `images.bin` - Image poses and keypoints
-- `points3D.bin` - 3D point cloud
-- `depth_maps/` - Dense depth maps
+### CUDA Library Conflicts
+**Issue**: pycolmap CUDA conflicts with system CUDA libraries  
+**Solution**: Pipeline uses COLMAP binary execution by default
 
-### 3DGS Specific Data
-- `3dgs_data.pkl` - Complete pipeline data
-- `scale_info.json` - Scale recovery information
-- `quality_metrics.json` - Reconstruction quality metrics
+### Memory Issues on Large Datasets
+**Issue**: GPU memory exhaustion on datasets >1000 images  
+**Solution**: Enable `--use_vocab_tree` for efficient pair selection
 
-### Visualization
-- `reconstruction.ply` - Point cloud visualization
-- `trajectory.txt` - Camera trajectory
-- `performance_report.json` - Detailed metrics
+### LightGlue Installation
+**Issue**: LightGlue requires git installation  
+**Solution**: `pip install lightglue @ git+https://github.com/cvg/LightGlue.git`
 
-## 🤝 Contributing
+## Benchmark Results
 
-We welcome contributions! Areas for improvement:
+| Dataset Size | hloc Time | Enhanced SfM | Speedup | Memory Saved |
+|-------------|-----------|--------------|---------|--------------|
+| 100 images  | 180s      | 35s          | 5.1x    | 1.2 GB       |
+| 500 images  | 1200s     | 140s         | 8.6x    | 3.5 GB       |
+| 1000 images | 4800s     | 420s         | 11.4x   | 8.2 GB       |
+
+## Contributing
+
+We welcome contributions! Key areas for improvement:
 - Additional feature extractors (LoFTR, etc.)
-- More robust dense reconstruction
+- More semantic segmentation models
 - Distributed processing for massive datasets
 - Integration with other SfM libraries
 
@@ -301,35 +309,33 @@ We welcome contributions! Areas for improvement:
 # Install development dependencies
 pip install -r requirements.txt
 
-# Run linting
+# Run linting and tests
 black sfm/
 flake8 sfm/
-
-# Run tests
 pytest tests/
 ```
 
-## 📜 License
+## License
 
 MIT License - see LICENSE file for details
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **COLMAP** for SfM algorithms and data formats
 - **LightGlue** for feature matching
 - **FAISS** for efficient similarity search
 - **PyCeres** for nonlinear optimization
-- **Intel DPT** for monocular depth estimation
+- **HuggingFace Transformers** for semantic segmentation models
 - **hloc** for comparison and inspiration
 
-## 📞 Support
+## Support
 
 - **Issues**: GitHub Issues
-- **Documentation**: [Wiki](link-to-wiki)
+- **Documentation**: See CLAUDE.md for detailed usage
 - **Discussions**: GitHub Discussions
 
 ---
 
-**Optimized for 3D Gaussian Splatting** 🚀
+**Optimized for 3D Gaussian Splatting with Semantic Awareness**
 
-*Enhanced SfM: Where quality meets performance for 3DGS*
+*Enhanced SfM: Where quality meets performance for modern 3D reconstruction*
