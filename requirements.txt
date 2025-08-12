@@ -26,8 +26,10 @@ psutil>=5.9.0
 # Data storage and serialization
 h5py>=3.8.0
 
-# Machine learning for depth estimation (conditional import)
+# Machine learning for depth estimation and semantics (conditional import)
+transformers>=4.30.0
 timm>=0.9.0
+accelerate>=0.25.0
 requests>=2.28.0
 
 # Development and testing

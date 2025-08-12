@@ -1,6 +1,6 @@
 """
-Geometric verification module
-Supports multiple RANSAC implementations
+Geometric and Semantic verification module
+Supports multiple RANSAC implementations and semantic filtering
 """
 
 import numpy as np
@@ -37,7 +37,7 @@ class RANSACMethod(Enum):
 
 class GeometricVerification:
     """
-    Geometric verification with multiple RANSAC implementation options
+    Geometric and Semantic verification with multiple RANSAC implementation options
     """
     
     def __init__(self, 
@@ -81,6 +81,90 @@ class GeometricVerification:
         if self.method == RANSACMethod.OPENCV_MAGSAC:
             logger.info("Using OpenCV MAGSAC")
 
+    def filter_by_semantics(self, matches: Dict, features: Dict, semantic_masks: Dict) -> Dict:
+        """
+        Filters matches based on semantic consistency.
+
+        Args:
+            matches (Dict): The raw matches from the matcher.
+            features (Dict): The features dictionary containing keypoints.
+            semantic_masks (Dict): A dictionary mapping image paths to their semantic masks.
+
+        Returns:
+            Dict: A new dictionary containing only the semantically consistent matches.
+        """
+        logger.info("Starting semantic filtering of matches...")
+        semantically_verified_matches = {}
+        
+        for pair_key, match_data in tqdm(matches.items(), desc="Semantic Filtering"):
+            # Handle both tuple and string keys
+            if isinstance(pair_key, tuple):
+                img_path1, img_path2 = pair_key
+            else:
+                # Fallback for string keys
+                img_path1_str, img_path2_str = pair_key.split('-')
+                # Find the full path from the features dictionary keys
+                img_path1 = next((p for p in features.keys() if Path(p).name == img_path1_str), None)
+                img_path2 = next((p for p in features.keys() if Path(p).name == img_path2_str), None)
+
+            if not img_path1 or not img_path2:
+                logger.warning(f"Could not find image paths for pair {pair_key}")
+                continue
+
+            mask1 = semantic_masks.get(img_path1)
+            mask2 = semantic_masks.get(img_path2)
+
+            if mask1 is None or mask2 is None:
+                logger.debug(f"Skipping semantic check for pair {pair_key} due to missing masks.")
+                semantically_verified_matches[pair_key] = match_data
+                continue
+
+            kpts1 = features[img_path1]['keypoints']
+            kpts2 = features[img_path2]['keypoints']
+            
+            matches0 = match_data['matches0']
+            
+            good_indices = []
+            for i in range(len(matches0)):
+                idx1 = matches0[i]
+                idx2 = match_data['matches1'][i]
+
+                pt1 = kpts1[idx1]
+                pt2 = kpts2[idx2]
+
+                # Get semantic label at keypoint locations
+                # Ensure coordinates are within mask bounds
+                y1, x1 = int(pt1[1]), int(pt1[0])
+                y2, x2 = int(pt2[1]), int(pt2[0])
+                
+                if 0 <= y1 < mask1.shape[0] and 0 <= x1 < mask1.shape[1] and \
+                   0 <= y2 < mask2.shape[0] and 0 <= x2 < mask2.shape[1]:
+                    
+                    label1 = mask1[y1, x1]
+                    label2 = mask2[y2, x2]
+
+                    # Keep match if labels are identical
+                    if label1 == label2:
+                        good_indices.append(i)
+
+            if len(good_indices) < self.min_matches:
+                logger.debug(f"Pair {pair_key} has too few semantically consistent matches: {len(good_indices)}")
+                continue
+
+            # Create a new match_data dictionary with filtered matches
+            new_match_data = match_data.copy()
+            new_match_data['matches0'] = match_data['matches0'][good_indices]
+            new_match_data['matches1'] = match_data['matches1'][good_indices]
+            if 'mscores0' in match_data:
+                new_match_data['mscores0'] = match_data['mscores0'][good_indices]
+            if 'mscores1' in match_data:
+                new_match_data['mscores1'] = match_data['mscores1'][good_indices]
+            
+            semantically_verified_matches[pair_key] = new_match_data
+            logger.debug(f"Pair {pair_key}: {len(good_indices)}/{len(matches0)} matches passed semantic check.")
+
+        logger.info(f"Semantic filtering complete. {len(semantically_verified_matches)}/{len(matches)} pairs remain.")
+        return semantically_verified_matches
 
     # ... (all other methods like find_essential_matrix, verify_matches, etc., remain here)
     def find_essential_matrix(self, 
