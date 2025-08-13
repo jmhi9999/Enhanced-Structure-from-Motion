@@ -20,6 +20,15 @@ try:
 except ImportError:
     FAISS_AVAILABLE = False
     faiss = None
+
+# NetVLAD import
+try:
+    from .netvlad_retrieval import NetVLADRetrieval
+    NETVLAD_AVAILABLE = True
+except ImportError:
+    NETVLAD_AVAILABLE = False
+    NetVLADRetrieval = None
+
 from typing import Dict, List, Tuple, Any, Optional, Set
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -74,6 +83,16 @@ class GPUVocabularyTree:
         self.image_descriptors = {}
         self.image_features = {}
         self.inverted_index = {}
+        
+        # NetVLAD retrieval system
+        self.netvlad_retrieval = None
+        if NETVLAD_AVAILABLE and config.get('use_netvlad', False):
+            try:
+                self.netvlad_retrieval = NetVLADRetrieval(device, config, output_path)
+                logger.info("NetVLAD retrieval initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize NetVLAD: {e}")
+                self.netvlad_retrieval = None
         
         # Performance monitoring
         self.build_time = 0.0
@@ -585,7 +604,8 @@ class GPUVocabularyTree:
         return list(expanded_pairs)
     
     def get_hybrid_matching_strategy(self, all_features: Dict[str, Any],
-                                   strategy: str = "adaptive") -> List[Tuple[str, str]]:
+                                   strategy: str = "adaptive",
+                                   use_netvlad: bool = False) -> List[Tuple[str, str]]:
         """
         Hybrid matching strategy that combines vocabulary tree with fallback methods
         
@@ -593,6 +613,8 @@ class GPUVocabularyTree:
         - "adaptive": Vocabulary tree + expansion for small datasets
         - "exhaustive_small": Brute force for very small datasets (<20 images)
         - "tiered": Vocabulary tree + brute force for critical images
+        - "netvlad": NetVLAD-based global descriptor matching
+        - "netvlad_hybrid": NetVLAD + vocabulary tree combination
         """
         dataset_size = len(all_features)
         logger.info(f"Using hybrid strategy '{strategy}' for {dataset_size} images")
@@ -667,9 +689,49 @@ class GPUVocabularyTree:
             logger.info(f"Tiered strategy: {len(vocab_pairs)} vocab + {len(all_pairs) - len(vocab_pairs)} brute force")
             return list(all_pairs)
         
+        elif strategy == "netvlad" and self.netvlad_retrieval is not None:
+            # Pure NetVLAD-based matching
+            image_paths = list(all_features.keys())
+            pairs = self.netvlad_retrieval.get_image_pairs_for_matching(
+                image_paths,
+                max_pairs_per_image=20,
+                min_similarity=0.3
+            )
+            logger.info(f"NetVLAD strategy generated {len(pairs)} pairs")
+            return pairs
+        
+        elif strategy == "netvlad_hybrid" and self.netvlad_retrieval is not None:
+            # Combine NetVLAD and vocabulary tree
+            image_paths = list(all_features.keys())
+            
+            # Get NetVLAD pairs (global similarity)
+            netvlad_pairs = set(self.netvlad_retrieval.get_image_pairs_for_matching(
+                image_paths,
+                max_pairs_per_image=15,
+                min_similarity=0.25
+            ))
+            
+            # Get vocabulary tree pairs (local feature similarity)
+            vocab_pairs = set(self.get_image_pairs_for_matching(
+                all_features,
+                max_pairs_per_image=10,
+                min_score_threshold=0.02
+            ))
+            
+            # Combine both approaches
+            combined_pairs = netvlad_pairs | vocab_pairs
+            
+            logger.info(f"NetVLAD hybrid: {len(netvlad_pairs)} NetVLAD + {len(vocab_pairs)} vocab = {len(combined_pairs)} total")
+            return list(combined_pairs)
+        
         else:
             # Default to standard vocabulary tree
-            return self.get_image_pairs_for_matching(all_features)
+            if use_netvlad and self.netvlad_retrieval is not None:
+                logger.info("Using NetVLAD fallback")
+                image_paths = list(all_features.keys())
+                return self.netvlad_retrieval.get_image_pairs_for_matching(image_paths)
+            else:
+                return self.get_image_pairs_for_matching(all_features)
     
     def _get_exhaustive_pairs(self, image_list: List[str]) -> List[Tuple[str, str]]:
         """Generate all possible image pairs (brute force)"""

@@ -33,6 +33,81 @@ from sfm.utils.image_utils import resize_image
 logger = logging.getLogger(__name__)
 
 
+def _get_optimal_config(scene_type: str, quality: str, num_images: int):
+    """Get optimal configuration based on scene type and quality"""
+    
+    # Base configurations for different scene types
+    if scene_type == 'indoor':
+        # Indoor scenes (real estate): need NetVLAD for room similarity
+        base_config = {
+            'use_advanced_matching': True,
+            'use_netvlad': True,
+            'netvlad_clusters': 32,  # Fewer clusters for similar rooms
+            'vocab_size': 5000,
+            'min_score_threshold': 0.005,
+            'max_pairs_per_image': 25
+        }
+        strategy = 'netvlad_hybrid'
+        
+    elif scene_type == 'outdoor':
+        # Outdoor scenes: vocabulary tree is sufficient
+        base_config = {
+            'use_advanced_matching': True,
+            'use_netvlad': False,
+            'vocab_size': 10000,
+            'min_score_threshold': 0.01,
+            'max_pairs_per_image': 20
+        }
+        strategy = 'adaptive'
+        
+    elif scene_type == 'aerial':
+        # Aerial/drone: need thorough matching due to scale changes
+        base_config = {
+            'use_advanced_matching': True,
+            'use_netvlad': True,
+            'netvlad_clusters': 64,
+            'vocab_size': 15000,
+            'min_score_threshold': 0.02,
+            'max_pairs_per_image': 30
+        }
+        strategy = 'netvlad_hybrid'
+        
+    else:  # general
+        base_config = {
+            'use_advanced_matching': num_images > 20,
+            'use_netvlad': False,
+            'vocab_size': 10000,
+            'min_score_threshold': 0.01,
+            'max_pairs_per_image': 20
+        }
+        strategy = 'adaptive'
+    
+    # Adjust based on quality preference
+    if quality == 'fast':
+        base_config.update({
+            'max_pairs_per_image': max(10, base_config['max_pairs_per_image'] // 2),
+            'min_score_threshold': base_config['min_score_threshold'] * 2,
+            'vocab_size': base_config['vocab_size'] // 2
+        })
+    elif quality == 'thorough':
+        base_config.update({
+            'max_pairs_per_image': min(40, base_config['max_pairs_per_image'] * 2),
+            'min_score_threshold': base_config['min_score_threshold'] * 0.5,
+            'vocab_size': base_config['vocab_size'] * 2
+        })
+        if scene_type in ['indoor', 'aerial']:
+            strategy = 'netvlad_hybrid'
+    
+    # Dataset size adjustments
+    if num_images < 20:
+        strategy = 'exhaustive_small'
+        base_config['use_advanced_matching'] = False
+    elif num_images > 500:
+        base_config['max_pairs_per_image'] = min(15, base_config['max_pairs_per_image'])
+    
+    return base_config, strategy
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Enhanced SfM Pipeline for 3DGS")
     
@@ -60,6 +135,14 @@ def parse_args():
                        help="Maximum pairs per image for vocabulary tree")
     parser.add_argument("--max_total_pairs", type=int, default=None,
                        help="Maximum total pairs for brute force matching")
+    
+    # Scene type optimization (replaces multiple complex options)
+    parser.add_argument("--scene_type", type=str, default="indoor",
+                       choices=["general", "indoor", "outdoor", "aerial"],
+                       help="Scene type for optimized matching (indoor=real estate, outdoor=landscape, aerial=drone)")
+    parser.add_argument("--matching_quality", type=str, default="balanced",
+                       choices=["fast", "balanced", "thorough"],
+                       help="Matching quality vs speed trade-off")
     
     # Bundle adjustment
     parser.add_argument("--use_gpu_ba", action="store_true",
@@ -181,6 +264,8 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'max_image_size': args.max_image_size,
             'use_brute_force': args.use_brute_force,
             'use_vocab_tree': args.use_vocab_tree,
+            'scene_type': args.scene_type,
+            'matching_quality': args.matching_quality,
             'max_pairs_per_image': args.max_pairs_per_image,
             'max_total_pairs': args.max_total_pairs,
             'use_gpu_ba': args.use_gpu_ba,
@@ -395,28 +480,30 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info("Stage 3: Smart pair selection...")
     stage_start = time.time()
     
-    if kwargs.get('use_vocab_tree', False):
-        # Use vocabulary tree for O(n log n) complexity
+    # Determine optimal matching strategy based on scene type and quality
+    scene_type = kwargs.get('scene_type', 'general')
+    quality = kwargs.get('matching_quality', 'balanced')
+    num_images = len(features)
+    
+    # Auto-configure based on scene type and quality
+    config, strategy = _get_optimal_config(scene_type, quality, num_images)
+    
+    if config['use_advanced_matching']:
+        # Use advanced vocabulary tree with hybrid strategies
         vocab_tree = GPUVocabularyTree(
             device=device,
-            config={
-                'vocab_size': 10000,
-                'vocab_depth': 6,
-                'vocab_branching_factor': 10
-            },
+            config=config,
             output_path=str(output_path)
         )
         
-        # Build vocabulary
-        vocab_tree.build_vocabulary(features)
-        
-        # Get smart pairs
-        image_pairs = vocab_tree.get_image_pairs_for_matching(
+        # Get pairs using determined strategy
+        image_pairs = vocab_tree.get_hybrid_matching_strategy(
             features,
-            max_pairs_per_image=kwargs.get('max_pairs_per_image', 20)
+            strategy=strategy,
+            use_netvlad=config.get('use_netvlad', False)
         )
         
-        logger.info(f"Selected {len(image_pairs)} pairs using vocabulary tree")
+        logger.info(f"Selected {len(image_pairs)} pairs using {strategy} strategy for {scene_type} scenes")
     else:
         # Fallback to exhaustive matching (slower)
         image_pairs = [(img1, img2) for i, img1 in enumerate(image_paths) 
