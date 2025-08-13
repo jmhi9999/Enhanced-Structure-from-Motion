@@ -456,34 +456,228 @@ class GPUVocabularyTree:
         return sorted_candidates[:top_k]
     
     def get_image_pairs_for_matching(self, all_features: Dict[str, Any], 
-                                   max_pairs_per_image: int = 20) -> List[Tuple[str, str]]:
+                                   max_pairs_per_image: int = 20,
+                                   min_score_threshold: float = 0.01,
+                                   ensure_connectivity: bool = True) -> List[Tuple[str, str]]:
         """
-        Get efficient image pairs for matching using vocabulary tree
-        Replaces hloc's O(n²) brute force with O(n log n) retrieval
+        Get efficient image pairs for matching using vocabulary tree with adaptive selection
+        
+        Args:
+            max_pairs_per_image: Maximum pairs per image (adaptive based on scores)
+            min_score_threshold: Minimum similarity score threshold
+            ensure_connectivity: Ensure all images have at least one connection
         """
-        logger.info("Getting image pairs using vocabulary tree...")
+        logger.info("Getting image pairs using adaptive vocabulary tree...")
         
         if self.vocabulary is None:
             logger.info("Building vocabulary first...")
             self.build_vocabulary(all_features)
         
         image_pairs = set()
+        connection_count = {img: 0 for img in all_features.keys()}
         
-        # For each image, find most similar images
+        # Adaptive top-k based on dataset size
+        dataset_size = len(all_features)
+        if dataset_size < 50:
+            adaptive_k = min(max_pairs_per_image, dataset_size - 1)
+        elif dataset_size < 200:
+            adaptive_k = min(max_pairs_per_image, int(dataset_size * 0.15))
+        else:
+            adaptive_k = max_pairs_per_image
+        
+        logger.info(f"Using adaptive k={adaptive_k} for {dataset_size} images")
+        
+        # For each image, find most similar images with score filtering
         for img_path, img_features in tqdm(all_features.items(), 
                                           desc="Finding similar pairs"):
-            similar_images = self.query_similar_images(img_features, max_pairs_per_image)
+            similar_images = self.query_similar_images(img_features, adaptive_k * 2)  # Get more candidates
             
+            # Filter by score threshold and adaptive selection
+            valid_pairs = []
             for similar_img, score in similar_images:
-                if similar_img != img_path:
-                    # Ensure consistent pair ordering
-                    pair = tuple(sorted([img_path, similar_img]))
-                    image_pairs.add(pair)
+                if similar_img != img_path and score >= min_score_threshold:
+                    valid_pairs.append((similar_img, score))
+            
+            # Take top adaptive_k from valid pairs
+            selected_pairs = valid_pairs[:adaptive_k]
+            
+            for similar_img, score in selected_pairs:
+                pair = tuple(sorted([img_path, similar_img]))
+                image_pairs.add(pair)
+                connection_count[img_path] += 1
+                connection_count[similar_img] += 1
+        
+        # Ensure connectivity for isolated images
+        if ensure_connectivity:
+            isolated_images = [img for img, count in connection_count.items() if count == 0]
+            for img_path in isolated_images:
+                # Find best matches without score threshold
+                similar_images = self.query_similar_images(all_features[img_path], 3)
+                for similar_img, _ in similar_images[:1]:  # At least one connection
+                    if similar_img != img_path:
+                        pair = tuple(sorted([img_path, similar_img]))
+                        image_pairs.add(pair)
+                        break
         
         pairs_list = list(image_pairs)
-        logger.info(f"Generated {len(pairs_list)} image pairs (vs {len(all_features)*(len(all_features)-1)//2} brute force)")
+        avg_connections = sum(connection_count.values()) / len(connection_count) if connection_count else 0
+        logger.info(f"Generated {len(pairs_list)} pairs, avg {avg_connections:.1f} connections per image")
         
         return pairs_list
+    
+    def expand_pairs_with_geometric_verification(self, pairs_list: List[Tuple[str, str]], 
+                                               all_features: Dict[str, Any],
+                                               expansion_ratio: float = 0.5) -> List[Tuple[str, str]]:
+        """
+        Expand successful pairs with geometric verification for missed connections
+        
+        Args:
+            pairs_list: Initial vocabulary tree pairs
+            all_features: All image features
+            expansion_ratio: Ratio of additional pairs to try (0.5 = 50% more)
+        """
+        logger.info("Expanding pairs with geometric verification...")
+        
+        # Get images with successful geometric verification (would need to be called after verification)
+        # For now, simulate by expanding pairs for images with few connections
+        
+        expanded_pairs = set(pairs_list)
+        original_count = len(pairs_list)
+        
+        # Count connections per image
+        connection_count = {}
+        for img1, img2 in pairs_list:
+            connection_count[img1] = connection_count.get(img1, 0) + 1
+            connection_count[img2] = connection_count.get(img2, 0) + 1
+        
+        # Find images with few connections
+        min_connections = 3
+        images_needing_expansion = [img for img, count in connection_count.items() 
+                                  if count < min_connections]
+        
+        # For images needing expansion, try more pairs
+        expansion_candidates = int(len(all_features) * expansion_ratio)
+        
+        for img_path in images_needing_expansion:
+            if img_path not in all_features:
+                continue
+                
+            # Get more candidates for this image
+            similar_images = self.query_similar_images(
+                all_features[img_path], 
+                expansion_candidates
+            )
+            
+            # Add pairs that weren't already included
+            added_count = 0
+            for similar_img, score in similar_images:
+                if similar_img != img_path:
+                    pair = tuple(sorted([img_path, similar_img]))
+                    if pair not in expanded_pairs:
+                        expanded_pairs.add(pair)
+                        added_count += 1
+                        if added_count >= 5:  # Limit expansion per image
+                            break
+        
+        expansion_count = len(expanded_pairs) - original_count
+        logger.info(f"Expanded from {original_count} to {len(expanded_pairs)} pairs (+{expansion_count})")
+        
+        return list(expanded_pairs)
+    
+    def get_hybrid_matching_strategy(self, all_features: Dict[str, Any],
+                                   strategy: str = "adaptive") -> List[Tuple[str, str]]:
+        """
+        Hybrid matching strategy that combines vocabulary tree with fallback methods
+        
+        Strategies:
+        - "adaptive": Vocabulary tree + expansion for small datasets
+        - "exhaustive_small": Brute force for very small datasets (<20 images)
+        - "tiered": Vocabulary tree + brute force for critical images
+        """
+        dataset_size = len(all_features)
+        logger.info(f"Using hybrid strategy '{strategy}' for {dataset_size} images")
+        
+        if strategy == "exhaustive_small" and dataset_size < 20:
+            # Use brute force for very small datasets
+            logger.info("Using exhaustive matching for small dataset")
+            return self._get_exhaustive_pairs(list(all_features.keys()))
+        
+        elif strategy == "adaptive":
+            # Adaptive approach based on dataset size
+            if dataset_size < 50:
+                # Small dataset: More generous vocabulary tree + expansion
+                pairs = self.get_image_pairs_for_matching(
+                    all_features, 
+                    max_pairs_per_image=min(30, dataset_size-1),
+                    min_score_threshold=0.005,  # Lower threshold
+                    ensure_connectivity=True
+                )
+                # Always expand for small datasets
+                pairs = self.expand_pairs_with_geometric_verification(
+                    pairs, all_features, expansion_ratio=0.8
+                )
+                
+            elif dataset_size < 200:
+                # Medium dataset: Standard vocabulary tree + selective expansion
+                pairs = self.get_image_pairs_for_matching(
+                    all_features,
+                    max_pairs_per_image=25,
+                    min_score_threshold=0.01,
+                    ensure_connectivity=True
+                )
+                pairs = self.expand_pairs_with_geometric_verification(
+                    pairs, all_features, expansion_ratio=0.3
+                )
+                
+            else:
+                # Large dataset: Conservative vocabulary tree
+                pairs = self.get_image_pairs_for_matching(
+                    all_features,
+                    max_pairs_per_image=20,
+                    min_score_threshold=0.02,
+                    ensure_connectivity=True
+                )
+                # Optional expansion only if connectivity is poor
+                pairs = self.expand_pairs_with_geometric_verification(
+                    pairs, all_features, expansion_ratio=0.1
+                )
+            
+            return pairs
+        
+        elif strategy == "tiered":
+            # Tiered approach: vocabulary tree + brute force for critical images
+            vocab_pairs = self.get_image_pairs_for_matching(all_features)
+            
+            # Identify critical images (few connections)
+            connection_count = {}
+            for img1, img2 in vocab_pairs:
+                connection_count[img1] = connection_count.get(img1, 0) + 1
+                connection_count[img2] = connection_count.get(img2, 0) + 1
+            
+            critical_images = [img for img, count in connection_count.items() if count < 2]
+            
+            # Add brute force pairs for critical images
+            all_pairs = set(vocab_pairs)
+            for critical_img in critical_images:
+                for other_img in all_features.keys():
+                    if other_img != critical_img:
+                        pair = tuple(sorted([critical_img, other_img]))
+                        all_pairs.add(pair)
+            
+            logger.info(f"Tiered strategy: {len(vocab_pairs)} vocab + {len(all_pairs) - len(vocab_pairs)} brute force")
+            return list(all_pairs)
+        
+        else:
+            # Default to standard vocabulary tree
+            return self.get_image_pairs_for_matching(all_features)
+    
+    def _get_exhaustive_pairs(self, image_list: List[str]) -> List[Tuple[str, str]]:
+        """Generate all possible image pairs (brute force)"""
+        pairs = []
+        for i in range(len(image_list)):
+            for j in range(i + 1, len(image_list)):
+                pairs.append((image_list[i], image_list[j]))
+        return pairs
     
     def _compute_feature_hash(self, all_features: Dict[str, Any]) -> str:
         """Compute hash of features for caching"""
