@@ -349,7 +349,8 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
                 'vocab_size': 10000,
                 'vocab_depth': 6,
                 'vocab_branching_factor': 10
-            }
+            },
+            output_path=str(output_path)
         )
         
         # Build vocabulary
@@ -406,7 +407,22 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     
     if matches is None:
         feature_type = kwargs.get('feature_extractor', 'superpoint')
-        matcher = EnhancedLightGlueMatcher(device=device, feature_type=feature_type)
+        
+        # Configure matcher based on vocabulary tree usage
+        matcher_config = {
+            'use_brute_force': kwargs.get('use_brute_force', True),
+            'use_vocabulary_tree': kwargs.get('use_vocab_tree', False),
+            'max_pairs_per_image': kwargs.get('max_pairs_per_image', 20),
+            'max_total_pairs': kwargs.get('max_total_pairs', None),
+            'output_path': str(output_path)
+        }
+        
+        # If vocabulary tree was used, pass the selected pairs to the matcher
+        if kwargs.get('use_vocab_tree', False) and 'image_pairs' in locals():
+            matcher_config['predefined_pairs'] = image_pairs
+            matcher_config['use_brute_force'] = False  # Force to use only predefined pairs
+        
+        matcher = EnhancedLightGlueMatcher(device=device, feature_type=feature_type, config=matcher_config)
         
         # Ensure features are in the correct format for the matcher
         # If features were loaded from tensor file, ensure numpy format
@@ -420,7 +436,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
                     formatted_feat[key] = value
             formatted_features[img_path] = formatted_feat
         
-        # Use the enhanced matcher which processes all features at once
+        # Use the enhanced matcher which processes features based on configuration
         matches = matcher.match_features(formatted_features)
         
         # Create tensor version for backup

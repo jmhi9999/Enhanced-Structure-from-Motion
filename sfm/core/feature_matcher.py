@@ -65,7 +65,8 @@ class EnhancedLightGlueMatcher:
         
         # Initialize vocabulary tree as fallback for very large datasets
         if self.use_vocabulary_tree and GPU_VOCAB_AVAILABLE:
-            self.vocabulary_tree = GPUVocabularyTree(device, config)
+            output_path = config.get('output_path', '.')
+            self.vocabulary_tree = GPUVocabularyTree(device, config, output_path=output_path)
             logger.info("Using vocabulary tree matcher")
         else:
             self.vocabulary_tree = None
@@ -124,8 +125,15 @@ class EnhancedLightGlueMatcher:
         
         logger.info(f"GPU tensor-based feature matching for {len(image_paths)} images...")
         
-        # Use GPU brute force matcher (preferred method)
-        if self.gpu_brute_force_matcher is not None:
+        # Check if predefined pairs are provided (from vocabulary tree)
+        predefined_pairs = self.config.get('predefined_pairs', None)
+        if predefined_pairs is not None:
+            logger.info(f"Using predefined pairs from vocabulary tree: {len(predefined_pairs)} pairs")
+            # Match only the predefined pairs
+            matches = self._match_pairs_sequential(features, predefined_pairs)
+            
+        # Use GPU brute force matcher (preferred method when no predefined pairs)
+        elif self.gpu_brute_force_matcher is not None:
             logger.info("Using GPU brute force matcher with tensor operations...")
             
             # Load features to GPU memory as tensors
