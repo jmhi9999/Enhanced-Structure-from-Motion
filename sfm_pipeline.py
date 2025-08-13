@@ -38,16 +38,17 @@ def _get_optimal_config(scene_type: str, quality: str, num_images: int):
     
     # Base configurations for different scene types
     if scene_type == 'indoor':
-        # Indoor scenes (real estate): need NetVLAD for room similarity
+        # Indoor scenes: more conservative to avoid overfitting
         base_config = {
             'use_advanced_matching': True,
             'use_netvlad': True,
-            'netvlad_clusters': 32,  # Fewer clusters for similar rooms
+            'netvlad_clusters': 32,
             'vocab_size': 5000,
-            'min_score_threshold': 0.005,
-            'max_pairs_per_image': 25
+            'min_score_threshold': 0.01,    # Higher threshold
+            'max_pairs_per_image': 15       # Fewer pairs per image
         }
-        strategy = 'netvlad_hybrid'
+        # Use adaptive strategy to be more conservative
+        strategy = 'adaptive' if num_images > 100 else 'netvlad_hybrid'
         
     elif scene_type == 'outdoor':
         # Outdoor scenes: vocabulary tree is sufficient
@@ -127,7 +128,7 @@ def parse_args():
                        help="Maximum number of keypoints per image")
     
     # Matching and verification
-    parser.add_argument("--use_brute_force", action="store_true", default=True,
+    parser.add_argument("--use_brute_force", action="store_true", default=False,
                        help="Use GPU brute force matching (default and recommended)")
     parser.add_argument("--use_vocab_tree", action="store_true",
                        help="Use vocabulary tree for smart pair selection (for very large datasets)")

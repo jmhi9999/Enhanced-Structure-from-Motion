@@ -701,27 +701,43 @@ class GPUVocabularyTree:
             return pairs
         
         elif strategy == "netvlad_hybrid" and self.netvlad_retrieval is not None:
-            # Combine NetVLAD and vocabulary tree
+            # Conservative NetVLAD + vocabulary tree combination to avoid overfitting
             image_paths = list(all_features.keys())
             
-            # Get NetVLAD pairs (global similarity)
+            # More conservative NetVLAD pairs (higher similarity threshold)
             netvlad_pairs = set(self.netvlad_retrieval.get_image_pairs_for_matching(
                 image_paths,
-                max_pairs_per_image=15,
-                min_similarity=0.25
+                max_pairs_per_image=10,    # Reduced from 15
+                min_similarity=0.35       # Increased from 0.25
             ))
             
-            # Get vocabulary tree pairs (local feature similarity)
+            # Conservative vocabulary tree pairs
             vocab_pairs = set(self.get_image_pairs_for_matching(
                 all_features,
-                max_pairs_per_image=10,
-                min_score_threshold=0.02
+                max_pairs_per_image=8,     # Reduced from 10
+                min_score_threshold=0.03   # Increased from 0.02
             ))
             
-            # Combine both approaches
-            combined_pairs = netvlad_pairs | vocab_pairs
+            # Use intersection for high-confidence pairs + selective union
+            intersection_pairs = netvlad_pairs & vocab_pairs  # Both methods agree
+            union_pairs = netvlad_pairs | vocab_pairs
             
-            logger.info(f"NetVLAD hybrid: {len(netvlad_pairs)} NetVLAD + {len(vocab_pairs)} vocab = {len(combined_pairs)} total")
+            # Conservative combination: prioritize intersection, add selective union
+            if len(intersection_pairs) > len(image_paths) * 2:  # Good intersection coverage
+                combined_pairs = intersection_pairs
+                logger.info(f"Using intersection pairs (high confidence): {len(combined_pairs)} pairs")
+            else:
+                # Add top NetVLAD pairs to vocab pairs (more conservative than full union)
+                combined_pairs = vocab_pairs.copy()
+                # Get additional high-quality NetVLAD pairs
+                additional_netvlad = netvlad_pairs - vocab_pairs
+                additional_count = min(len(additional_netvlad), len(vocab_pairs) // 2)
+                top_additional = list(additional_netvlad)[:additional_count]
+                for pair in top_additional:
+                    combined_pairs.add(pair)
+                    
+                logger.info(f"Conservative hybrid: {len(vocab_pairs)} vocab + {len(combined_pairs) - len(vocab_pairs)} top NetVLAD = {len(combined_pairs)} total")
+            
             return list(combined_pairs)
         
         else:
