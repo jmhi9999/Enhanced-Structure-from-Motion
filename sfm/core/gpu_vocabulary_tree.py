@@ -50,7 +50,7 @@ class GPUVocabularyTree:
     6. Production-ready stability and performance
     """
     
-    def __init__(self, device: torch.device, config: Dict[str, Any] = None):
+    def __init__(self, device: torch.device, config: Dict[str, Any] = None, output_path: Optional[str] = None):
         # Allow CPU-only operation as fallback
         self.gpu_available = CUPY_AVAILABLE and FAISS_AVAILABLE
         if not self.gpu_available:
@@ -59,6 +59,7 @@ class GPUVocabularyTree:
         
         config = config or {}
         self.device = device
+        self.output_path = Path(output_path) if output_path else Path(".")
         self.vocab_size = config.get('vocab_size', 10000)
         self.depth = config.get('vocab_depth', 6)
         self.branching_factor = config.get('vocab_branching_factor', 10)
@@ -129,7 +130,7 @@ class GPUVocabularyTree:
         Much faster than hloc's approach using hierarchical k-means with GPU
         """
         
-        cache_path = Path("vocabulary_cache.pkl")
+        cache_path = self.output_path / "vocabulary_cache.pkl"
         feature_hash = self._compute_feature_hash(all_features)
         
         # Check for cached vocabulary
