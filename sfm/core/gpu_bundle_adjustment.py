@@ -225,7 +225,15 @@ class GPUBundleAdjustment:
     
     def _process_camera(self, cam_id: int, cam_data: Dict) -> np.ndarray:
         """Process single camera parameters"""
-        return np.array(cam_data['params'], dtype=np.float64)
+        params = np.array(cam_data['params'], dtype=np.float64)
+        
+        # Handle case where COLMAP provides only 3 parameters [fx, cx, cy]
+        # Convert to standard format [fx, fy, cx, cy]
+        if len(params) == 3:
+            fx, cx, cy = params
+            params = np.array([fx, fx, cx, cy], dtype=np.float64)  # Assume fy = fx
+        
+        return params
     
     def _process_image_pose(self, img_data: Dict) -> np.ndarray:
         """Process single image pose parameters"""
