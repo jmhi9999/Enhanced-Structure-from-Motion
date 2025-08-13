@@ -307,7 +307,7 @@ class GPUVocabularyTree:
             
             # Use FAISS GPU k-means for speed
             d = descriptors.shape[1]
-            kmeans = faiss.Kmeans(d, k, niter=20, verbose=False, gpu=self.use_gpu)
+            kmeans = faiss.Kmeans(d, k, niter=20, verbose=False, gpu=self.use_gpu, min_points_per_centroid=1)
             
             if self.use_gpu and self.gpu_resource:
                 kmeans.train(descriptors)
