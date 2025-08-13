@@ -113,6 +113,36 @@ class EnhancedLightGlueMatcher:
             logger.error("LightGlue is not available. Please install it to use this matcher.")
             raise ImportError("LightGlue is not available. Please install it to use this matcher.")
     
+    def _detect_feature_type_from_descriptors(self, descriptor_shape):
+        """Detect feature type based on descriptor dimensions"""
+        if len(descriptor_shape) >= 2:
+            desc_dim = descriptor_shape[-1]  # Last dimension is feature dimension
+            if desc_dim == 256:
+                return 'superpoint'
+            elif desc_dim == 128:
+                # Could be ALIKED or DISK, default to ALIKED
+                return 'aliked'
+            else:
+                logger.warning(f"Unknown descriptor dimension: {desc_dim}, defaulting to superpoint")
+                return 'superpoint'
+        return 'superpoint'
+    
+    def _reinitialize_matcher_if_needed(self, desc_dim):
+        """Reinitialize matcher if descriptor dimensions don't match"""
+        if self.matcher is None:
+            return
+            
+        expected_dim = self.matcher.conf.input_dim
+        if desc_dim != expected_dim:
+            detected_type = self._detect_feature_type_from_descriptors([desc_dim])
+            if detected_type != self.feature_type:
+                logger.info(f"Descriptor dimension mismatch: expected {expected_dim}, got {desc_dim}. "
+                           f"Reinitializing matcher from {self.feature_type} to {detected_type}")
+                
+                # Update feature type and reinitialize
+                self.feature_type = detected_type
+                self._setup_matcher()
+    
     
     def match_features(self, features: Dict[str, Any]) -> Dict[Tuple[str, str], Any]:
         """
@@ -324,30 +354,50 @@ class EnhancedLightGlueMatcher:
             if kpts1.dim() == 2:  # [N, 2] -> [1, N, 2]
                 kpts1 = kpts1.unsqueeze(0)
             
-            # Ensure descriptors have correct shape for LightGlue: [1, N, D] before transpose
-            if desc0.dim() == 1:
-                desc0 = desc0.unsqueeze(0)
-            if desc0.dim() == 2:  
-                if desc0.shape[0] > desc0.shape[1]:
-                    # If shape is [N, D], add batch dimension -> [1, N, D]
-                    desc0 = desc0.unsqueeze(0)
-                else:
-                    # If shape is [D, N], transpose and add batch dim -> [1, N, D]
-                    desc0 = desc0.transpose(0, 1).unsqueeze(0)
+            # Ensure descriptors have correct shape for LightGlue: [1, N, D]
+            # More robust shape correction that compares with keypoint counts
+            def fix_descriptor_shape(desc, kpts):
+                """Fix descriptor shape to be [1, N, D] where N matches keypoint count"""
+                n_kpts = kpts.shape[-2]  # Number of keypoints
                 
-            if desc1.dim() == 1:
-                desc1 = desc1.unsqueeze(0)
-            if desc1.dim() == 2:  
-                if desc1.shape[0] > desc1.shape[1]:
-                    # If shape is [N, D], add batch dimension -> [1, N, D]
-                    desc1 = desc1.unsqueeze(0)
-                else:
-                    # If shape is [D, N], transpose and add batch dim -> [1, N, D]
-                    desc1 = desc1.transpose(0, 1).unsqueeze(0)
+                if desc.dim() == 1:
+                    # If 1D, reshape to [1, 1, D] or similar
+                    desc = desc.unsqueeze(0).unsqueeze(0)
+                elif desc.dim() == 2:
+                    # If 2D, determine if it's [N, D] or [D, N] by comparing with keypoint count
+                    if desc.shape[0] == n_kpts:
+                        # Shape is [N, D], add batch dimension -> [1, N, D]
+                        desc = desc.unsqueeze(0)
+                    elif desc.shape[1] == n_kpts:
+                        # Shape is [D, N], transpose and add batch dim -> [1, N, D]
+                        desc = desc.transpose(0, 1).unsqueeze(0)
+                    else:
+                        # Use heuristic: assume smaller dimension is descriptor dimension
+                        if desc.shape[0] < desc.shape[1]:
+                            # Likely [D, N], transpose and add batch
+                            desc = desc.transpose(0, 1).unsqueeze(0)
+                        else:
+                            # Likely [N, D], add batch dimension
+                            desc = desc.unsqueeze(0)
+                elif desc.dim() == 3:
+                    # Already has batch dimension, but check if dimensions are correct
+                    if desc.shape[1] != n_kpts and desc.shape[2] == n_kpts:
+                        # Shape is [1, D, N], transpose to [1, N, D]
+                        desc = desc.transpose(1, 2)
+                    # If shape[1] == n_kpts, it's already correct [1, N, D]
+                
+                return desc
+            
+            desc0 = fix_descriptor_shape(desc0, kpts0)
+            desc1 = fix_descriptor_shape(desc1, kpts1)
             
             # Final shape validation
             logger.debug(f"Final kpts0 shape: {kpts0.shape}, desc0 shape: {desc0.shape}")
             logger.debug(f"Final kpts1 shape: {kpts1.shape}, desc1 shape: {desc1.shape}")
+            
+            # Check and reinitialize matcher if descriptor dimensions don't match
+            desc_dim = desc0.shape[-1]  # Get descriptor dimension
+            self._reinitialize_matcher_if_needed(desc_dim)
             
             # LightGlue expects nested format
             data = {
