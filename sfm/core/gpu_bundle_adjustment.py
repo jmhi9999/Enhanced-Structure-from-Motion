@@ -971,13 +971,13 @@ class GPUReprojectionError(pyceres.CostFunction):
             return
         
         X, Y, Z = camera_point
-        fx, cx, cy = self.intrinsics[0], self.intrinsics[1], self.intrinsics[2]
+        fx, fy, cx, cy = self.intrinsics[0], self.intrinsics[1], self.intrinsics[2], self.intrinsics[3]
         
         # Common terms
         inv_z = 1.0 / Z
         inv_z2 = inv_z * inv_z
         
-        if jacobians[0] is not None:  # Camera parameter Jacobian [7x2]
+        if jacobians[0] is not None:  # Camera parameter Jacobian [7x2] -> flattened to [14]
             jacobians[0].fill(0.0)
             
             # Jacobian w.r.t quaternion [4x2]
@@ -989,21 +989,21 @@ class GPUReprojectionError(pyceres.CostFunction):
                 
                 # Projection derivatives
                 dx_dq = fx * (dX_dq * inv_z - X * dZ_dq * inv_z2)
-                dy_dq = fx * (dY_dq * inv_z - Y * dZ_dq * inv_z2)
+                dy_dq = fy * (dY_dq * inv_z - Y * dZ_dq * inv_z2)
                 
-                jacobians[0][i, 0] = dx_dq
-                jacobians[0][i, 1] = dy_dq
+                # Jacobians are flattened: [dx/dp0, dy/dp0, dx/dp1, dy/dp1, ...]
+                jacobians[0][i * 2] = dx_dq      # dx/dq_i
+                jacobians[0][i * 2 + 1] = dy_dq  # dy/dq_i
             
             # Jacobian w.r.t translation [3x2]
-            fx, fy = self.intrinsics[0], self.intrinsics[1]
-            jacobians[0][4, 0] = fx * inv_z  # dx/dtx
-            jacobians[0][4, 1] = 0.0         # dy/dtx
-            jacobians[0][5, 0] = 0.0         # dx/dty
-            jacobians[0][5, 1] = fy * inv_z  # dy/dty
-            jacobians[0][6, 0] = -fx * X * inv_z2  # dx/dtz
-            jacobians[0][6, 1] = -fy * Y * inv_z2  # dy/dtz
+            jacobians[0][8] = fx * inv_z      # dx/dtx
+            jacobians[0][9] = 0.0             # dy/dtx
+            jacobians[0][10] = 0.0            # dx/dty
+            jacobians[0][11] = fy * inv_z     # dy/dty
+            jacobians[0][12] = -fx * X * inv_z2  # dx/dtz
+            jacobians[0][13] = -fy * Y * inv_z2  # dy/dtz
         
-        if jacobians[1] is not None:  # 3D point Jacobian [3x2]
+        if jacobians[1] is not None:  # 3D point Jacobian [3x2] -> flattened to [6]
             jacobians[1].fill(0.0)
             
             # d_proj/d_point = d_proj/d_camera_point * d_camera_point/d_point
@@ -1014,9 +1014,9 @@ class GPUReprojectionError(pyceres.CostFunction):
                 dY_dp = R[1, i]
                 dZ_dp = R[2, i]
                 
-                fx, fy = self.intrinsics[0], self.intrinsics[1]
                 dx_dp = fx * (dX_dp * inv_z - X * dZ_dp * inv_z2)
                 dy_dp = fy * (dY_dp * inv_z - Y * dZ_dp * inv_z2)
                 
-                jacobians[1][i, 0] = dx_dp
-                jacobians[1][i, 1] = dy_dp
+                # Jacobians are flattened: [dx/dp0, dy/dp0, dx/dp1, dy/dp1, dx/dp2, dy/dp2]
+                jacobians[1][i * 2] = dx_dp      # dx/dp_i
+                jacobians[1][i * 2 + 1] = dy_dp  # dy/dp_i
