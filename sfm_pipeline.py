@@ -487,8 +487,9 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     
     # Auto-configure based on scene type and quality
     config, strategy = _get_optimal_config(scene_type, quality, num_images)
+    use_advanced_matching = config['use_advanced_matching']
     
-    if config['use_advanced_matching']:
+    if use_advanced_matching:
         # Use advanced vocabulary tree with hybrid strategies
         vocab_tree = GPUVocabularyTree(
             device=device,
@@ -569,10 +570,11 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'output_path': str(output_path)
         }
         
-        # If vocabulary tree was used, pass the selected pairs to the matcher
-        if kwargs.get('use_vocab_tree', False) and 'image_pairs' in locals():
+        # If advanced matching was used, pass the selected pairs to the matcher
+        if use_advanced_matching and 'image_pairs' in locals():
             matcher_config['predefined_pairs'] = image_pairs
             matcher_config['use_brute_force'] = False  # Force to use only predefined pairs
+            logger.info(f"Passing {len(image_pairs)} selected pairs to matcher")
         
         matcher = EnhancedLightGlueMatcher(device=device, feature_type=feature_type, config=matcher_config)
         
