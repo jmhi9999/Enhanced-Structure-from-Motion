@@ -6,12 +6,17 @@ Supports SuperPoint, ALIKED, and DISK
 import torch
 import torch.nn as nn
 import numpy as np
+import gc
 from typing import Dict, List, Tuple, Any, Optional
 from abc import ABC, abstractmethod
 import cv2
 from pathlib import Path
+import logging
 
 # Don't import LightGlue at module level - use lazy imports
+
+
+logger = logging.getLogger(__name__)
 
 
 class BaseFeatureExtractor(ABC):
@@ -46,6 +51,25 @@ class BaseFeatureExtractor(ABC):
         # Convert to tensor and add batch dimension
         image_tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0)
         return image_tensor.to(self.device)
+    
+    def clear_memory(self):
+        """Clear GPU memory used by the feature extractor"""
+        try:
+            if hasattr(self, 'model') and self.model is not None:
+                del self.model
+                self.model = None
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Clear CUDA cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
+            logger.info(f"{self.__class__.__name__} memory cleared")
+        except Exception as e:
+            logger.warning(f"Error clearing {self.__class__.__name__} memory: {e}")
 
 
 class SuperPointExtractor(BaseFeatureExtractor):
@@ -106,6 +130,11 @@ class SuperPointExtractor(BaseFeatureExtractor):
                     'scores': scores,
                     'image_shape': image.shape[:2]
                 }
+                
+                # Clean up intermediate tensors
+                del image_tensor, pred
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
         
         return features
 
@@ -166,6 +195,11 @@ class ALIKEDExtractor(BaseFeatureExtractor):
                     'scores': scores,
                     'image_shape': image.shape[:2]
                 }
+                
+                # Clean up intermediate tensors
+                del image_tensor, pred
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
         
         return features
 
@@ -228,6 +262,11 @@ class DISKExtractor(BaseFeatureExtractor):
                     'scores': scores,
                     'image_shape': image.shape[:2]
                 }
+                
+                # Clean up intermediate tensors
+                del image_tensor, pred
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
         
         return features
 

@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import time
+import gc
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -123,8 +124,28 @@ def setup_device(device_arg: str) -> torch.device:
     if device.type == "cuda":
         logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
         logger.info(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        logger.info(f"Initial GPU memory allocated: {torch.cuda.memory_allocated() / 1024**2:.1f} MB")
     
     return device
+
+
+def cleanup_gpu_memory(device: torch.device, stage_name: str = ""):
+    """Comprehensive GPU memory cleanup"""
+    if device.type == "cuda":
+        # Force garbage collection
+        gc.collect()
+        
+        # Clear PyTorch CUDA cache
+        torch.cuda.empty_cache()
+        
+        # Synchronize CUDA operations
+        torch.cuda.synchronize()
+        
+        memory_allocated = torch.cuda.memory_allocated() / 1024**2
+        memory_cached = torch.cuda.memory_reserved() / 1024**2
+        
+        stage_info = f" after {stage_name}" if stage_name else ""
+        logger.info(f"GPU memory{stage_info}: {memory_allocated:.1f} MB allocated, {memory_cached:.1f} MB cached")
 
 
 def setup_logging(output_dir: str):
@@ -217,6 +238,9 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     
     stage_times['preprocessing'] = time.time() - stage_start
     logger.info(f"Preprocessing completed in {stage_times['preprocessing']:.2f}s")
+    
+    # Memory cleanup after preprocessing
+    cleanup_gpu_memory(device, "preprocessing")
 
     # Stage 1.5: Semantic Segmentation
     semantic_masks = None
@@ -260,6 +284,19 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
 
         stage_times['semantic_segmentation'] = time.time() - stage_start
         logger.info(f"Semantic segmentation completed in {stage_times['semantic_segmentation']:.2f}s")
+        
+        # Clean up segmentation model memory
+        if 'segmenter' in locals():
+            try:
+                if hasattr(segmenter, 'model'):
+                    del segmenter.model
+                if hasattr(segmenter, 'processor'):
+                    del segmenter.processor
+                del segmenter
+            except Exception as e:
+                logger.warning(f"Error cleaning up segmenter: {e}")
+        
+        cleanup_gpu_memory(device, "semantic segmentation")
 
     
     # Stage 2: Feature extraction
@@ -336,6 +373,23 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         
         stage_times['feature_extraction'] = time.time() - stage_start
         logger.info(f"Feature extraction completed in {stage_times['feature_extraction']:.2f}s")
+        
+        # Clean up feature extractor memory
+        if 'feature_extractor' in locals():
+            try:
+                if hasattr(feature_extractor, 'model'):
+                    del feature_extractor.model
+                if hasattr(feature_extractor, 'extractor'):
+                    del feature_extractor.extractor
+                del feature_extractor
+            except Exception as e:
+                logger.warning(f"Error cleaning up feature extractor: {e}")
+        
+        # Clean up large tensor data that's no longer needed
+        if 'images_for_extraction' in locals():
+            del images_for_extraction
+        
+        cleanup_gpu_memory(device, "feature extraction")
     
     # Stage 3: Smart pair selection (O(n log n) vs O(n²))
     logger.info("Stage 3: Smart pair selection...")
@@ -371,6 +425,17 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     
     stage_times['pair_selection'] = time.time() - stage_start
     logger.info(f"Pair selection completed in {stage_times['pair_selection']:.2f}s")
+    
+    # Clean up vocabulary tree memory if used
+    if 'vocab_tree' in locals():
+        try:
+            if hasattr(vocab_tree, 'clear_memory'):
+                vocab_tree.clear_memory()
+            del vocab_tree
+        except Exception as e:
+            logger.warning(f"Error cleaning up vocabulary tree: {e}")
+    
+    cleanup_gpu_memory(device, "pair selection")
     
     # Stage 4: Feature matching
     logger.info("Stage 4: Feature matching...")
@@ -460,6 +525,29 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         
         stage_times['feature_matching'] = time.time() - stage_start
         logger.info(f"Feature matching completed in {stage_times['feature_matching']:.2f}s")
+        
+        # Clean up matcher memory
+        if 'matcher' in locals():
+            try:
+                if hasattr(matcher, 'clear_memory'):
+                    matcher.clear_memory()
+                if hasattr(matcher, 'matcher') and hasattr(matcher.matcher, 'clear_memory'):
+                    matcher.matcher.clear_memory()
+                del matcher
+            except Exception as e:
+                logger.warning(f"Error cleaning up matcher: {e}")
+        
+        # Clean up large tensor data
+        if 'matches_tensors' in locals():
+            try:
+                del matches_tensors
+            except Exception as e:
+                logger.warning(f"Error cleaning up match tensors: {e}")
+        
+        if 'formatted_features' in locals():
+            del formatted_features
+        
+        cleanup_gpu_memory(device, "feature matching")
     
     # Stage 5: Semantic Match Filtering
     verified_matches = matches
@@ -472,6 +560,15 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         
         stage_times['semantic_filtering'] = time.time() - stage_start
         logger.info(f"Semantic filtering completed in {stage_times['semantic_filtering']:.2f}s")
+        
+        # Clean up verifier memory
+        if 'verifier' in locals():
+            try:
+                del verifier
+            except Exception as e:
+                logger.warning(f"Error cleaning up verifier: {e}")
+        
+        cleanup_gpu_memory(device, "semantic filtering")
     else:
         logger.info("Stage 5: Skipping semantic filtering.")
         stage_times['semantic_filtering'] = 0.0
@@ -496,6 +593,9 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     stage_times['sfm_reconstruction'] = time.time() - stage_start
     logger.info(f"COLMAP SfM reconstruction completed in {stage_times['sfm_reconstruction']:.2f}s")
     
+    # Clean up reconstruction memory
+    cleanup_gpu_memory(device, "SfM reconstruction")
+    
     # Stage 7: GPU Bundle Adjustment (optional)
     if kwargs.get('use_gpu_ba', False) and device.type == "cuda":
         logger.info("Stage 7: GPU-accelerated bundle adjustment...")
@@ -518,6 +618,17 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         
         stage_times['bundle_adjustment'] = time.time() - stage_start
         logger.info(f"Bundle adjustment completed in {stage_times['bundle_adjustment']:.2f}s")
+        
+        # Clean up bundle adjustment memory
+        if 'gpu_ba' in locals():
+            try:
+                if hasattr(gpu_ba, 'clear_memory'):
+                    gpu_ba.clear_memory()
+                del gpu_ba
+            except Exception as e:
+                logger.warning(f"Error cleaning up GPU bundle adjustment: {e}")
+        
+        cleanup_gpu_memory(device, "bundle adjustment")
     
             
     # Stage 9: Copy reconstruction files for 3DGS compatibility
@@ -589,6 +700,17 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         
         stage_times['scale_recovery'] = time.time() - stage_start
         logger.info(f"Scale recovery completed in {stage_times['scale_recovery']:.2f}s")
+        
+        # Clean up scale recovery memory
+        if 'scale_recovery' in locals():
+            try:
+                if hasattr(scale_recovery, 'clear_memory'):
+                    scale_recovery.clear_memory()
+                del scale_recovery
+            except Exception as e:
+                logger.warning(f"Error cleaning up scale recovery: {e}")
+        
+        cleanup_gpu_memory(device, "scale recovery")
     
     # Stage 10: Save results in COLMAP format (for 3DGS)
     logger.info("Stage 10: Saving results...")
@@ -609,6 +731,9 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     stage_times['saving'] = time.time() - stage_start
     logger.info(f"Saving completed in {stage_times['saving']:.2f}s")
     
+    # Final comprehensive memory cleanup
+    cleanup_gpu_memory(device, "saving")
+    
     # Final summary
     total_time = time.time() - start_time
     logger.info("=" * 60)
@@ -628,12 +753,33 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info(f"\nResults saved to: {output_path}")
     logger.info("Ready for 3D Gaussian Splatting!")
     
+    # Final cleanup of all large variables
+    cleanup_variables = [
+        'processed_images', 'features', 'features_tensors', 'matches', 'matches_tensors',
+        'verified_matches', 'semantic_masks', 'image_paths'
+    ]
+    
+    for var_name in cleanup_variables:
+        if var_name in locals():
+            try:
+                exec(f"del {var_name}")
+            except Exception as e:
+                logger.warning(f"Error cleaning up {var_name}: {e}")
+    
+    # Final GPU memory cleanup
+    cleanup_gpu_memory(device, "pipeline completion")
+    
+    # Log final memory state
+    if device.type == "cuda":
+        final_memory = torch.cuda.memory_allocated() / 1024**2
+        logger.info(f"Final GPU memory allocated: {final_memory:.1f} MB")
+    
     return {
         'sparse_points': sparse_points,
         'cameras': cameras,
         'images': images,
-        'features': features,
-        'scale_info': scale_recovery.get_scale_info() if kwargs.get('scale_recovery', False) else None,
+        'features': None,  # Don't return large feature data to prevent memory retention
+        'scale_info': None,  # Avoid returning scale_recovery reference
         'total_time': total_time,
         'stage_times': stage_times
     }

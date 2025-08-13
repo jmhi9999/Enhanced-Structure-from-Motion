@@ -11,6 +11,7 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import time
+import gc
 
 try:
     from lightglue import LightGlue, SuperPoint, ALIKED, DISK
@@ -177,6 +178,40 @@ class EnhancedLightGlueMatcher:
         logger.info(f"Successfully matched {len(matches)} pairs")
         
         return matches
+    
+    def clear_memory(self):
+        """Clear GPU memory used by the feature matcher"""
+        try:
+            # Clear GPU brute force matcher memory
+            if hasattr(self, 'gpu_matcher') and self.gpu_matcher is not None:
+                if hasattr(self.gpu_matcher, 'clear_memory'):
+                    self.gpu_matcher.clear_memory()
+                del self.gpu_matcher
+                self.gpu_matcher = None
+            
+            # Clear vocabulary tree memory
+            if hasattr(self, 'vocab_tree') and self.vocab_tree is not None:
+                if hasattr(self.vocab_tree, 'clear_memory'):
+                    self.vocab_tree.clear_memory()
+                del self.vocab_tree
+                self.vocab_tree = None
+            
+            # Clear LightGlue matcher
+            if hasattr(self, 'matcher') and self.matcher is not None:
+                del self.matcher
+                self.matcher = None
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Clear CUDA cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
+            logger.info("Feature matcher memory cleared")
+        except Exception as e:
+            logger.warning(f"Error clearing feature matcher memory: {e}")
     
     def _match_pairs_parallel(self, features: Dict[str, Any], 
                             pairs: List[Tuple[str, str]]) -> Dict[Tuple[str, str], Any]:
@@ -493,4 +528,25 @@ class FeatureMatcher:
     
     def match(self, features: Dict[str, Any]) -> Dict[Tuple[str, str], Any]:
         """Match features between images"""
-        return self.matcher.match_features(features) 
+        return self.matcher.match_features(features)
+    
+    def clear_memory(self):
+        """Clear GPU memory used by the feature matcher"""
+        try:
+            if hasattr(self, 'matcher') and self.matcher is not None:
+                if hasattr(self.matcher, 'clear_memory'):
+                    self.matcher.clear_memory()
+                del self.matcher
+                self.matcher = None
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Clear CUDA cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
+            logger.info("FeatureMatcher memory cleared")
+        except Exception as e:
+            logger.warning(f"Error clearing FeatureMatcher memory: {e}") 

@@ -6,6 +6,7 @@ Provides semantic masks for image understanding and filtering
 import logging
 import numpy as np
 import torch
+import gc
 from PIL import Image
 from pathlib import Path
 from typing import Dict, List, Union, Optional, Tuple
@@ -179,6 +180,19 @@ class SemanticSegmenter:
                     predicted_mask = img_logits.argmax(dim=1).squeeze().cpu().numpy()
                     results[str(img_path)] = predicted_mask
                     
+                    # Clean up intermediate tensors
+                    del img_logits
+                
+                # Clean up batch tensors
+                del logits, outputs
+                if 'inputs' in locals():
+                    del inputs
+                
+                # Force garbage collection and clear CUDA cache
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    
             except Exception as e:
                 logger.warning(f"Failed to process batch starting at {batch_paths[0]}: {e}")
                 # Fallback to individual processing
@@ -190,6 +204,12 @@ class SemanticSegmenter:
                         logger.warning(f"Failed to process individual image {img_path}: {e2}")
         
         logger.info(f"Successfully segmented {len(results)}/{len(image_paths)} images")
+        
+        # Final cleanup
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
         return results
     
     def save_masks(self, masks: Dict[str, np.ndarray], output_dir: str):
@@ -228,6 +248,26 @@ class SemanticSegmenter:
             'label2id': self.label2id,
             'model_name': self.model_name
         }
+    
+    def clear_memory(self):
+        """Clear GPU memory used by the segmentation model"""
+        try:
+            if hasattr(self, 'model'):
+                del self.model
+            if hasattr(self, 'processor'):
+                del self.processor
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Clear CUDA cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
+            logger.info("Semantic segmentation model memory cleared")
+        except Exception as e:
+            logger.warning(f"Error clearing semantic segmentation memory: {e}")
     
     def get_semantic_statistics(self, masks: Dict[str, np.ndarray]) -> Dict:
         """
@@ -305,4 +345,10 @@ def segment_images(image_paths: List[Union[str, Path]],
         Dictionary mapping image paths to semantic masks
     """
     segmenter = SemanticSegmenter(model_name=model_name, device=device)
-    return segmenter.segment_images_batch(image_paths, batch_size=batch_size)
+    try:
+        results = segmenter.segment_images_batch(image_paths, batch_size=batch_size)
+        return results
+    finally:
+        # Always clean up memory
+        segmenter.clear_memory()
+        del segmenter
