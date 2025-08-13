@@ -131,10 +131,18 @@ class NetVLADRetrieval:
             import torchvision.models as models
             
             # Use ResNet50 as backbone
-            backbone = models.resnet50(pretrained=True)
+            backbone = models.resnet50(weights='IMAGENET1K_V1')  # Fix deprecation warning
             
             # Remove final layers (keep up to conv features)
-            backbone = nn.Sequential(*list(backbone.children())[:-2])
+            modules = list(backbone.children())[:-2]
+            backbone = nn.Sequential(*modules)
+            
+            # Add adaptive pooling to match expected feature dimension
+            backbone.add_module('adaptive_pool', nn.AdaptiveAvgPool2d((7, 7)))
+            
+            # Add dimension reduction to match NetVLAD expected input
+            backbone.add_module('dim_reduce', nn.Conv2d(2048, self.feature_dim, 1))
+            
             backbone = backbone.to(self.device)
             backbone.eval()
             
