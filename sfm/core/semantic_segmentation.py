@@ -1,7 +1,7 @@
 """
 Semantic segmentation module for Enhanced SfM Pipeline
 Provides semantic masks for image understanding and filtering
-Supports both SegFormer and SAM 2 models with flexible switching
+Uses SegFormer models for semantic segmentation
 """
 
 import logging
@@ -24,192 +24,9 @@ except ImportError:
     AutoModelForSemanticSegmentation = None
     F = None
 
-# Conditional imports for SAM 2
-try:
-    from sam2.sam2_image_predictor import SAM2ImagePredictor
-    SAM2_AVAILABLE = True
-except ImportError:
-    SAM2_AVAILABLE = False
-    SAM2ImagePredictor = None
 
 logger = logging.getLogger(__name__)
 
-
-class SAM2Segmenter:
-    """
-    SAM 2 (Segment Anything Model 2) for semantic segmentation
-    High performance zero-shot segmentation with prompt support
-    """
-    
-    def __init__(self, 
-                 model_size: str = "large",
-                 device: Optional[torch.device] = None):
-        """
-        Initialize SAM 2 segmenter
-        
-        Args:
-            model_size: Model size (small, large, huge)
-            device: Torch device to use for inference
-        """
-        if not SAM2_AVAILABLE:
-            raise ImportError(
-                "SAM 2 not available. Install with: pip install git+https://github.com/facebookresearch/sam2.git"
-            )
-        
-        self.model_size = model_size
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # Map model sizes to HuggingFace model names
-        model_mapping = {
-            "small": "facebook/sam2-hiera-small",
-            "large": "facebook/sam2-hiera-large", 
-            "huge": "facebook/sam2-hiera-huge"
-        }
-        
-        if model_size not in model_mapping:
-            raise ValueError(f"Unsupported model size: {model_size}. Choose from {list(model_mapping.keys())}")
-        
-        self.model_name = model_mapping[model_size]
-        
-        logger.info(f"Loading SAM 2 model: {self.model_name}")
-        logger.info(f"Using device: {self.device}")
-        
-        try:
-            self.predictor = SAM2ImagePredictor.from_pretrained(self.model_name)
-            logger.info(f"SAM 2 {model_size} model loaded successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to load SAM 2 model: {e}")
-            raise
-    
-    def segment_image(self, image: Union[str, Path, Image.Image, np.ndarray]) -> np.ndarray:
-        """
-        Segment a single image using SAM 2
-        
-        Args:
-            image: Input image (path, PIL Image, or numpy array)
-            
-        Returns:
-            Semantic mask as numpy array
-        """
-        # Convert input to numpy array
-        if isinstance(image, (str, Path)):
-            pil_image = Image.open(image).convert("RGB")
-            image_array = np.array(pil_image)
-        elif isinstance(image, Image.Image):
-            image_array = np.array(image.convert("RGB"))
-        elif isinstance(image, np.ndarray):
-            image_array = image
-        else:
-            raise ValueError(f"Unsupported image type: {type(image)}")
-        
-        # SAM 2 inference
-        with torch.inference_mode(), torch.autocast(self.device.type, dtype=torch.bfloat16):
-            self.predictor.set_image(image_array)
-            
-            # Generate automatic masks for the entire image
-            masks, scores, _ = self.predictor.predict(
-                point_coords=None,
-                point_labels=None,
-                multimask_output=True
-            )
-            
-            # Combine masks into a single semantic mask
-            # Use the highest scoring mask as the primary segmentation
-            if len(masks) > 0:
-                best_mask_idx = np.argmax(scores)
-                semantic_mask = masks[best_mask_idx].astype(np.uint8)
-            else:
-                # Fallback: create empty mask
-                semantic_mask = np.zeros(image_array.shape[:2], dtype=np.uint8)
-        
-        return semantic_mask
-    
-    def segment_images_batch(self, 
-                           image_paths: List[Union[str, Path]], 
-                           batch_size: int = 4) -> Dict[str, np.ndarray]:
-        """
-        Segment multiple images (SAM 2 processes individually for optimal quality)
-        
-        Args:
-            image_paths: List of image paths
-            batch_size: Not used in SAM 2, kept for interface compatibility
-            
-        Returns:
-            Dictionary mapping image paths to semantic masks
-        """
-        results = {}
-        
-        logger.info(f"Segmenting {len(image_paths)} images with SAM 2 {self.model_size}")
-        
-        for img_path in tqdm(image_paths, desc="SAM 2 Segmentation"):
-            try:
-                mask = self.segment_image(img_path)
-                results[str(img_path)] = mask
-            except Exception as e:
-                logger.warning(f"Failed to process image {img_path}: {e}")
-        
-        logger.info(f"Successfully segmented {len(results)}/{len(image_paths)} images")
-        
-        # Memory cleanup
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        
-        return results
-    
-    def save_masks(self, masks: Dict[str, np.ndarray], output_dir: str):
-        """
-        Save semantic masks to files (compatible with SegFormer interface)
-        
-        Args:
-            masks: Dictionary of masks from segment_images_batch
-            output_dir: Output directory for mask files
-        """
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"Saving {len(masks)} SAM 2 semantic masks to {output_dir}")
-        
-        for img_path, mask in tqdm(masks.items(), desc="Saving SAM 2 masks"):
-            # Create output filename
-            img_name = Path(img_path).name
-            mask_path = output_path / f"{img_name}.png"
-            
-            # Convert mask to uint8 and save
-            mask_uint8 = mask.astype(np.uint8)
-            mask_image = Image.fromarray(mask_uint8)
-            mask_image.save(mask_path)
-    
-    def get_label_info(self) -> Dict:
-        """
-        Get information about SAM 2 labels (minimal info for compatibility)
-        
-        Returns:
-            Dictionary with label information
-        """
-        return {
-            'num_labels': 2,  # Binary masks (0/1)
-            'id2label': {0: 'background', 1: 'foreground'},
-            'label2id': {'background': 0, 'foreground': 1},
-            'model_name': self.model_name,
-            'model_size': self.model_size
-        }
-    
-    def clear_memory(self):
-        """Clear GPU memory used by SAM 2"""
-        try:
-            if hasattr(self, 'predictor'):
-                del self.predictor
-            
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-            
-            logger.info("SAM 2 model memory cleared")
-        except Exception as e:
-            logger.warning(f"Error clearing SAM 2 memory: {e}")
 
 
 class SemanticSegmenter:
@@ -499,56 +316,23 @@ class SemanticSegmenter:
         }
 
 
-def create_semantic_segmenter(engine: str = "segformer",
-                            model_name: str = "nvidia/segformer-b4-finetuned-ade-512-512",
-                            sam2_model: str = "large",
-                            device: Optional[torch.device] = None):
-    """
-    Factory function to create a semantic segmenter with flexible engine selection
-    
-    Args:
-        engine: Segmentation engine ("segformer" or "sam2")
-        model_name: HuggingFace model name (for SegFormer)
-        sam2_model: SAM 2 model size (for SAM 2)
-        device: Torch device
-        
-    Returns:
-        Segmenter instance (SemanticSegmenter or SAM2Segmenter)
-    """
-    if engine == "sam2":
-        return SAM2Segmenter(model_size=sam2_model, device=device)
-    elif engine == "segformer":
-        return SemanticSegmenter(model_name=model_name, device=device)
-    else:
-        raise ValueError(f"Unsupported engine: {engine}. Choose from ['segformer', 'sam2']")
-
-
 def segment_images(image_paths: List[Union[str, Path]], 
-                  engine: str = "segformer",
                   model_name: str = "nvidia/segformer-b4-finetuned-ade-512-512",
-                  sam2_model: str = "large",
                   batch_size: int = 4,
                   device: Optional[torch.device] = None) -> Dict[str, np.ndarray]:
     """
-    Convenience function to segment multiple images with flexible engine selection
+    Convenience function to segment multiple images using SegFormer
     
     Args:
         image_paths: List of image paths
-        engine: Segmentation engine ("segformer" or "sam2")
-        model_name: HuggingFace model name (for SegFormer)
-        sam2_model: SAM 2 model size (for SAM 2)
-        batch_size: Batch size for processing (ignored for SAM 2)
+        model_name: HuggingFace SegFormer model name
+        batch_size: Batch size for processing
         device: Torch device
         
     Returns:
         Dictionary mapping image paths to semantic masks
     """
-    segmenter = create_semantic_segmenter(
-        engine=engine,
-        model_name=model_name,
-        sam2_model=sam2_model,
-        device=device
-    )
+    segmenter = SemanticSegmenter(model_name=model_name, device=device)
     try:
         results = segmenter.segment_images_batch(image_paths, batch_size=batch_size)
         return results

@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
+from .semantic_groups import are_semantically_compatible
 
 # GPU modules - completely optional to avoid import issues
 try:
@@ -93,10 +94,12 @@ class GeometricVerification:
         Returns:
             Dict: A new dictionary containing only the semantically consistent matches.
         """
-        logger.info("Starting semantic filtering of matches...")
+        logger.info("Starting coarse semantic filtering of matches...")
         semantically_verified_matches = {}
+        total_matches_before = sum(len(match_data['matches0']) for match_data in matches.values())
+        total_matches_after = 0
         
-        for pair_key, match_data in tqdm(matches.items(), desc="Semantic Filtering"):
+        for pair_key, match_data in tqdm(matches.items(), desc="Coarse Semantic Filtering"):
             # Handle both tuple and string keys
             if isinstance(pair_key, tuple):
                 img_path1, img_path2 = pair_key
@@ -143,8 +146,8 @@ class GeometricVerification:
                     label1 = mask1[y1, x1]
                     label2 = mask2[y2, x2]
 
-                    # Keep match if labels are identical
-                    if label1 == label2:
+                    # Keep match if labels belong to same coarse semantic group
+                    if are_semantically_compatible(int(label1), int(label2)):
                         good_indices.append(i)
 
             if len(good_indices) < self.min_matches:
@@ -161,9 +164,13 @@ class GeometricVerification:
                 new_match_data['mscores1'] = match_data['mscores1'][good_indices]
             
             semantically_verified_matches[pair_key] = new_match_data
-            logger.debug(f"Pair {pair_key}: {len(good_indices)}/{len(matches0)} matches passed semantic check.")
+            total_matches_after += len(good_indices)
+            logger.debug(f"Pair {pair_key}: {len(good_indices)}/{len(matches0)} matches passed coarse semantic check.")
 
-        logger.info(f"Semantic filtering complete. {len(semantically_verified_matches)}/{len(matches)} pairs remain.")
+        retention_rate = (total_matches_after / total_matches_before * 100) if total_matches_before > 0 else 0
+        logger.info(f"Coarse semantic filtering complete:")
+        logger.info(f"  - Pairs: {len(semantically_verified_matches)}/{len(matches)} ({len(semantically_verified_matches)/len(matches)*100:.1f}%)")
+        logger.info(f"  - Matches: {total_matches_after}/{total_matches_before} ({retention_rate:.1f}% retained)")
         return semantically_verified_matches
 
     # ... (all other methods like find_essential_matrix, verify_matches, etc., remain here)

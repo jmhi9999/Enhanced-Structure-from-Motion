@@ -82,10 +82,6 @@ def parse_args():
                        help="Enable semantic segmentation for filtering matches.")
     parser.add_argument("--semantic_model", type=str, default="nvidia/segformer-b4-finetuned-ade-512-512",
                        help="Semantic segmentation model to use.")
-    parser.add_argument("--semantic_engine", type=str, default="segformer", choices=["segformer", "sam2"],
-                       help="Semantic segmentation engine to use.")
-    parser.add_argument("--sam2_model", type=str, default="large", choices=["small", "large", "huge"],
-                       help="SAM 2 model size to use.")
     parser.add_argument("--semantic_batch_size", type=int, default=4,
                        help="Batch size for semantic segmentation.")
 
@@ -271,14 +267,12 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
                 mask = np.array(Image.open(mask_path))
                 semantic_masks[img_path] = mask
         else:
-            logger.info(f"Running semantic segmentation with {kwargs.get('semantic_engine', 'segformer')} engine...")
+            logger.info(f"Running semantic segmentation with SegFormer...")
             
-            # Create segmenter with flexible engine selection
-            from sfm.core.semantic_segmentation import create_semantic_segmenter
-            segmenter = create_semantic_segmenter(
-                engine=kwargs.get('semantic_engine', 'segformer'),
+            # Create SegFormer segmenter
+            from sfm.core.semantic_segmentation import SemanticSegmenter
+            segmenter = SemanticSegmenter(
                 model_name=kwargs.get('semantic_model', 'nvidia/segformer-b4-finetuned-ade-512-512'),
-                sam2_model=kwargs.get('sam2_model', 'large'),
                 device=device
             )
             
@@ -287,13 +281,12 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
                 batch_size=kwargs.get('semantic_batch_size', 4)
             )
             
-            # Save masks (both SegFormer and SAM2 support this method)
+            # Save SegFormer masks
             segmenter.save_masks(semantic_masks, str(mask_output_dir))
             
-            # Log label info for user reference
-            if hasattr(segmenter, 'get_label_info'):
-                label_info = segmenter.get_label_info()
-                logger.info(f"Semantic labels: {label_info.get('num_labels', 'unknown')} classes")
+            # Log label info
+            label_info = segmenter.get_label_info()
+            logger.info(f"Semantic labels: {label_info.get('num_labels', 'unknown')} classes")
 
         stage_times['semantic_segmentation'] = time.time() - stage_start
         logger.info(f"Semantic segmentation completed in {stage_times['semantic_segmentation']:.2f}s")
