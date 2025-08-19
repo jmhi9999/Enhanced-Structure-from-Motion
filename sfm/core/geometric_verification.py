@@ -53,22 +53,22 @@ class GeometricVerification:
                 self.method = RANSACMethod(method_str)
             except ValueError:
                 self.method = RANSACMethod.OPENCV_MAGSAC
-            self.confidence = config.get('confidence', 0.999)  # 99.9% 확신
-            self.max_iterations = config.get('max_iterations', 20000)  # 더 많은 시도
-            self.threshold = config.get('threshold', 0.8)  # 매우 엄격한 0.8픽셀
-            self.min_matches = config.get('min_matches', 15)  # 균형잡힌 매치 요구
+            self.confidence = config.get('confidence', 0.9999)  # 99.99% 최대 확신
+            self.max_iterations = config.get('max_iterations', 50000)  # 최대 시도
+            self.threshold = config.get('threshold', 0.5)  # 극도로 엄격한 0.5픽셀
+            self.min_matches = config.get('min_matches', 25)  # 매우 많은 매치 요구
         elif config_or_method is None or isinstance(config_or_method, RANSACMethod):
             self.method = config_or_method or RANSACMethod.OPENCV_MAGSAC
-            self.confidence = kwargs.get('confidence', 0.999)  # 99.9% 확신
-            self.max_iterations = kwargs.get('max_iterations', 20000)  # 더 많은 시도
-            self.threshold = kwargs.get('threshold', 0.8)  # 매우 엄격한 0.8픽셀
-            self.min_matches = kwargs.get('min_matches', 15)  # 균형잡힌 매치 요구
+            self.confidence = kwargs.get('confidence', 0.9999)  # 99.99% 최대 확신
+            self.max_iterations = kwargs.get('max_iterations', 50000)  # 최대 시도
+            self.threshold = kwargs.get('threshold', 0.5)  # 극도로 엄격한 0.5픽셀
+            self.min_matches = kwargs.get('min_matches', 25)  # 매우 많은 매치 요구
         else:
             self.method = RANSACMethod.OPENCV_MAGSAC
-            self.confidence = kwargs.get('confidence', 0.999)  # 99.9% 확신
-            self.max_iterations = kwargs.get('max_iterations', 20000)  # 더 많은 시도
-            self.threshold = kwargs.get('threshold', 0.8)  # 매우 엄격한 0.8픽셀
-            self.min_matches = kwargs.get('min_matches', 15)  # 균형잡힌 매치 요구
+            self.confidence = kwargs.get('confidence', 0.9999)  # 99.99% 최대 확신
+            self.max_iterations = kwargs.get('max_iterations', 50000)  # 최대 시도
+            self.threshold = kwargs.get('threshold', 0.5)  # 극도로 엄격한 0.5픽셀
+            self.min_matches = kwargs.get('min_matches', 25)  # 매우 많은 매치 요구
         
         self.device = device or (torch.device('cuda') if GPU_AVAILABLE else torch.device('cpu'))
         self._init_method(**kwargs)
