@@ -146,8 +146,8 @@ class GeometricVerification:
                     label1 = mask1[y1, x1]
                     label2 = mask2[y2, x2]
 
-                    # Keep match if labels belong to same coarse semantic group (balanced filtering)
-                    if are_semantically_compatible(int(label1), int(label2), strict_mode=False):
+                    # Keep match ONLY if labels are exactly identical (strict filtering)
+                    if int(label1) == int(label2):
                         good_indices.append(i)
 
             if len(good_indices) < self.min_matches:
