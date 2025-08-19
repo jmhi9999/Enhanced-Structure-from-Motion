@@ -85,11 +85,6 @@ def parse_args():
     parser.add_argument("--semantic_batch_size", type=int, default=4,
                        help="Batch size for semantic segmentation.")
     
-    # Spatial Filtering
-    parser.add_argument("--use_spatial_filtering", action="store_true",
-                       help="Enable spatial consistency filtering for matches (fast alternative to semantics).")
-    parser.add_argument("--spatial_grid_size", type=int, default=8,
-                       help="Grid size for spatial consistency filtering (6-12 recommended).")
     
     # Advanced Geometric Filtering
     parser.add_argument("--use_advanced_geometric", action="store_true",
@@ -204,8 +199,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'use_semantics': args.use_semantics,
             'semantic_model': args.semantic_model,
             'semantic_batch_size': args.semantic_batch_size,
-            'use_spatial_filtering': args.use_spatial_filtering,
-            'spatial_grid_size': args.spatial_grid_size,
             'use_advanced_geometric': args.use_advanced_geometric,
             'geometric_strict_mode': args.geometric_strict_mode,
             'copy_to_3dgs_dir': args.copy_to_3dgs_dir,
@@ -234,10 +227,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info(f"GPU brute force matching: {kwargs.get('use_brute_force', True)}")
     logger.info(f"High quality mode: {kwargs.get('high_quality', False)}")
     logger.info(f"Use semantics: {kwargs.get('use_semantics', False)}")
-    logger.info(f"Use spatial filtering: {kwargs.get('use_spatial_filtering', False)}")
     logger.info(f"Use advanced geometric: {kwargs.get('use_advanced_geometric', False)}")
-    if kwargs.get('use_spatial_filtering', False):
-        logger.info(f"Spatial grid size: {kwargs.get('spatial_grid_size', 8)}")
     if kwargs.get('use_advanced_geometric', False):
         logger.info(f"Geometric strict mode: {kwargs.get('geometric_strict_mode', True)}")
 
@@ -594,24 +584,13 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         logger.info("Stage 5a: Skipping semantic filtering.")
         stage_times['semantic_filtering'] = 0.0
     
-    # Apply spatial consistency filtering if enabled
-    if kwargs.get('use_spatial_filtering', False):
-        logger.info("Stage 5b: Applying spatial consistency filtering to matches...")
-        stage_start = time.time()
-        
-        grid_size = kwargs.get('spatial_grid_size', 8)
-        verified_matches = verifier.filter_by_spatial_consistency(verified_matches, features, grid_size=grid_size)
-        
-        spatial_time = time.time() - stage_start
-        stage_times['spatial_filtering'] = spatial_time
-        logger.info(f"Spatial filtering completed in {spatial_time:.2f}s")
-    else:
-        logger.info("Stage 5b: Skipping spatial filtering.")
-        stage_times['spatial_filtering'] = 0.0
+    # Stage 5b: Spatial filtering removed (interferes with multiview matching)
+    logger.info("Stage 5b: Spatial filtering disabled (removed for better multiview support).")
+    stage_times['spatial_filtering'] = 0.0
     
     # Apply advanced geometric filtering if enabled
     if kwargs.get('use_advanced_geometric', False):
-        logger.info("Stage 5c: Applying advanced geometric filtering to matches...")
+        logger.info("Stage 5b: Applying advanced geometric filtering to matches...")
         stage_start = time.time()
         
         strict_mode = kwargs.get('geometric_strict_mode', True)
@@ -625,7 +604,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         stage_times['advanced_geometric'] = geometric_time
         logger.info(f"Advanced geometric filtering completed in {geometric_time:.2f}s")
     else:
-        logger.info("Stage 5c: Skipping advanced geometric filtering.")
+        logger.info("Stage 5b: Skipping advanced geometric filtering.")
         stage_times['advanced_geometric'] = 0.0
     
     # Clean up verifier memory

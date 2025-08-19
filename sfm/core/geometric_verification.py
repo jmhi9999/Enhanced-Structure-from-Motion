@@ -82,98 +82,7 @@ class GeometricVerification:
         if self.method == RANSACMethod.OPENCV_MAGSAC:
             logger.info("Using OpenCV MAGSAC")
 
-    def filter_by_spatial_consistency(self, matches: Dict, features: Dict, grid_size: int = 8) -> Dict:
-        """
-        Filters matches based on spatial consistency using grid-based approach.
-        Much faster than semantic filtering and very effective for indoor scenes.
-        
-        Args:
-            matches: Raw matches from matcher
-            features: Features dictionary containing keypoints and image shapes
-            grid_size: Size of spatial grid (8x8 recommended for indoor scenes)
-            
-        Returns:
-            Spatially consistent matches
-        """
-        logger.info(f"Starting spatial consistency filtering with {grid_size}x{grid_size} grid...")
-        spatially_verified_matches = {}
-        total_matches_before = sum(len(match_data.get('matches0', [])) for match_data in matches.values())
-        total_matches_after = 0
-        
-        for pair_key, match_data in tqdm(matches.items(), desc="Spatial filtering"):
-            try:
-                # Extract image paths
-                img_path0, img_path1 = pair_key
-                
-                # Get image shapes
-                if img_path0 in features and img_path1 in features:
-                    h0, w0 = features[img_path0]['image_shape']
-                    h1, w1 = features[img_path1]['image_shape']
-                else:
-                    # Fallback: load image to get shape
-                    img0 = Image.open(img_path0)
-                    img1 = Image.open(img_path1)
-                    w0, h0 = img0.size
-                    w1, h1 = img1.size
-                
-                # Get keypoints and matches
-                kp0 = features[img_path0]['keypoints']
-                kp1 = features[img_path1]['keypoints']
-                matches0 = match_data.get('matches0', [])
-                matches1 = match_data.get('matches1', [])
-                
-                if len(matches0) == 0:
-                    continue
-                
-                # Calculate grid indices for matched keypoints
-                matched_kp0 = kp0[matches0]
-                matched_kp1 = kp1[matches1]
-                
-                # Convert to grid coordinates (relative positions)
-                grid_x0 = (matched_kp0[:, 0] / w0 * grid_size).astype(int)
-                grid_y0 = (matched_kp0[:, 1] / h0 * grid_size).astype(int)
-                grid_x1 = (matched_kp1[:, 0] / w1 * grid_size).astype(int)
-                grid_y1 = (matched_kp1[:, 1] / h1 * grid_size).astype(int)
-                
-                # Keep matches where relative grid positions are similar
-                # Allow some tolerance for slight perspective changes
-                tolerance = 1
-                good_indices = []
-                
-                for i in range(len(matches0)):
-                    dx = abs(grid_x0[i] - grid_x1[i])
-                    dy = abs(grid_y0[i] - grid_y1[i])
-                    
-                    # Keep matches with consistent relative positions
-                    if dx <= tolerance and dy <= tolerance:
-                        good_indices.append(i)
-                
-                if len(good_indices) < self.min_matches:
-                    logger.debug(f"Pair {pair_key} has too few spatially consistent matches: {len(good_indices)}")
-                    continue
-                
-                # Create filtered match data
-                new_match_data = match_data.copy()
-                new_match_data['matches0'] = match_data['matches0'][good_indices]
-                new_match_data['matches1'] = match_data['matches1'][good_indices]
-                if 'mscores0' in match_data:
-                    new_match_data['mscores0'] = match_data['mscores0'][good_indices]
-                if 'mscores1' in match_data:
-                    new_match_data['mscores1'] = match_data['mscores1'][good_indices]
-                
-                spatially_verified_matches[pair_key] = new_match_data
-                total_matches_after += len(good_indices)
-                logger.debug(f"Pair {pair_key}: {len(good_indices)}/{len(matches0)} matches passed spatial consistency check.")
-                
-            except Exception as e:
-                logger.warning(f"Error in spatial filtering for pair {pair_key}: {e}")
-                continue
-        
-        retention_rate = (total_matches_after / total_matches_before * 100) if total_matches_before > 0 else 0
-        logger.info(f"Spatial consistency filtering complete:")
-        logger.info(f"  - Pairs: {len(spatially_verified_matches)}/{len(matches)} ({len(spatially_verified_matches)/len(matches)*100:.1f}%)")
-        logger.info(f"  - Matches: {total_matches_after}/{total_matches_before} ({retention_rate:.1f}% retained)")
-        return spatially_verified_matches
+    # Spatial filtering removed - interfered with multiview matching across different viewing angles
 
     def filter_by_semantics(self, matches: Dict, features: Dict, semantic_masks: Dict) -> Dict:
         """
@@ -453,9 +362,9 @@ class GeometricVerification:
             original_confidence = self.confidence
             original_max_iterations = self.max_iterations
             
-            self.threshold = 1.5  # More strict than default 3.0
-            self.confidence = 0.999  # Higher confidence than default 0.95
-            self.max_iterations = 10000  # More iterations
+            self.threshold = 0.8  # Very strict but practical (vs default 3.0)
+            self.confidence = 0.999  # Very high confidence
+            self.max_iterations = 10000  # Sufficient for convergence
             
         geometrically_verified_matches = {}
         total_matches_before = sum(len(match_data.get('matches0', [])) for match_data in matches.values())
