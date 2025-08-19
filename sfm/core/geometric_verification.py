@@ -394,24 +394,33 @@ class GeometricVerification:
                         scores1 = match_data['mscores1']
                         ratio_threshold = 0.8
                         
-                        good_indices = []
-                        for i in range(len(scores0)):
-                            if len(scores0[i]) > 1 and len(scores1[i]) > 1:
-                                ratio0 = scores0[i][0] / (scores0[i][1] + 1e-8)
-                                ratio1 = scores1[i][0] / (scores1[i][1] + 1e-8)
-                                if ratio0 > ratio_threshold and ratio1 > ratio_threshold:
-                                    good_indices.append(i)
-                            else:
-                                good_indices.append(i)  # Keep if no second best match
-                        
-                        if len(good_indices) < self.min_matches:
-                            continue
+                        # Ensure scores are arrays, not scalars
+                        if not hasattr(scores0, '__len__') or not hasattr(scores1, '__len__'):
+                            logger.debug(f"Pair {pair_key}: Scores are scalars, skipping ratio test")
+                        elif len(scores0) != len(matches0) or len(scores1) != len(matches1):
+                            logger.debug(f"Pair {pair_key}: Score length mismatch, skipping ratio test")
+                        else:
+                            good_indices = []
+                            for i in range(len(scores0)):
+                                # Check if scores are arrays with multiple values
+                                if (hasattr(scores0[i], '__len__') and len(scores0[i]) > 1 and 
+                                    hasattr(scores1[i], '__len__') and len(scores1[i]) > 1):
+                                    ratio0 = scores0[i][0] / (scores0[i][1] + 1e-8)
+                                    ratio1 = scores1[i][0] / (scores1[i][1] + 1e-8)
+                                    if ratio0 > ratio_threshold and ratio1 > ratio_threshold:
+                                        good_indices.append(i)
+                                else:
+                                    good_indices.append(i)  # Keep if no second best match
                             
-                        # Filter matches
-                        matches0 = matches0[good_indices]
-                        matches1 = matches1[good_indices]
-                        matched_kp0 = matched_kp0[good_indices]
-                        matched_kp1 = matched_kp1[good_indices]
+                            if len(good_indices) >= self.min_matches:
+                                # Filter matches
+                                matches0 = matches0[good_indices]
+                                matches1 = matches1[good_indices]
+                                matched_kp0 = matched_kp0[good_indices]
+                                matched_kp1 = matched_kp1[good_indices]
+                            else:
+                                logger.debug(f"Pair {pair_key}: Too few matches after ratio test: {len(good_indices)}")
+                                good_indices = []  # Reset to indicate no filtering was applied
                 
                 # Stage 2: Fundamental matrix verification
                 F, inliers = self.find_fundamental_matrix(matched_kp0, matched_kp1)
@@ -433,16 +442,22 @@ class GeometricVerification:
                 
                 # Preserve scores if available
                 if 'mscores0' in match_data:
-                    if progressive_filtering and len(good_indices) > 0:
-                        new_match_data['mscores0'] = match_data['mscores0'][good_indices][inlier_indices]
-                    else:
-                        new_match_data['mscores0'] = match_data['mscores0'][inlier_indices]
+                    try:
+                        if progressive_filtering and 'good_indices' in locals() and len(good_indices) > 0:
+                            new_match_data['mscores0'] = match_data['mscores0'][good_indices][inlier_indices]
+                        else:
+                            new_match_data['mscores0'] = match_data['mscores0'][inlier_indices]
+                    except (IndexError, TypeError) as e:
+                        logger.debug(f"Pair {pair_key}: Could not preserve mscores0: {e}")
                         
                 if 'mscores1' in match_data:
-                    if progressive_filtering and len(good_indices) > 0:
-                        new_match_data['mscores1'] = match_data['mscores1'][good_indices][inlier_indices]
-                    else:
-                        new_match_data['mscores1'] = match_data['mscores1'][inlier_indices]
+                    try:
+                        if progressive_filtering and 'good_indices' in locals() and len(good_indices) > 0:
+                            new_match_data['mscores1'] = match_data['mscores1'][good_indices][inlier_indices]
+                        else:
+                            new_match_data['mscores1'] = match_data['mscores1'][inlier_indices]
+                    except (IndexError, TypeError) as e:
+                        logger.debug(f"Pair {pair_key}: Could not preserve mscores1: {e}")
                 
                 geometrically_verified_matches[pair_key] = new_match_data
                 total_matches_after += len(final_matches0)
