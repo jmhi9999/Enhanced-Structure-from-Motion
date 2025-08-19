@@ -3,247 +3,154 @@ Coarse semantic grouping for ADE20K 150 classes
 Groups fine-grained classes into broader categories for robust semantic matching
 """
 
-# ADE20K 150 classes grouped for indoor residential environments
-# Based on actual SegFormer model class IDs, optimized for home interiors
+# ADE20K 150 classes grouped into coarse semantic categories
+# This reduces overly strict filtering while maintaining semantic consistency
 
 COARSE_SEMANTIC_GROUPS = {
-    # Fixed architectural elements - walls, ceilings, floors
-    'walls_structure': [
-        0,   # wall
-        1,   # building  
+    # Architectural structures - permanent building elements
+    'structure': [
+        0,   # wall  
+        1,   # building
         3,   # floor
         5,   # ceiling
+        6,   # road
+        11,  # sidewalk
+        13,  # earth
         14,  # door
+        25,  # house
+        49,  # skyscraper
+        52,  # path
         53,  # stairs
-        59,  # stairway
-        95,  # bannister
-        121, # step
+        55,  # runway
+        58,  # stairway
+        63,  # bridge
+        84,  # hovel
+        89,  # bannister
+        104, # awning
+        111, # booth
+        139, # step
+        140, # pier
     ],
     
-    # Large furniture - sofas, beds, major pieces
-    'large_furniture': [
+    # Furniture and interior objects
+    'furniture': [
         7,   # bed
-        23,  # sofa
-        30,  # armchair
-        31,  # seat
-        49,  # fireplace
-        69,  # bench
-        117, # cradle
-    ],
-    
-    # Storage furniture - cabinets, shelves, wardrobes
-    'storage_furniture': [
         10,  # cabinet
-        24,  # shelf
-        35,  # wardrobe
-        44,  # chest of drawers
-        55,  # case
-        62,  # bookcase
-        99,  # buffet
-        112, # basket
-    ],
-    
-    # Tables and work surfaces
-    'tables_surfaces': [
         15,  # table
-        33,  # desk
-        64,  # coffee table
-        70,  # countertop
-        73,  # kitchen island
-        77,  # bar
-    ],
-    
-    # Seating - chairs, stools
-    'seating': [
         19,  # chair
-        75,  # swivel chair
-        97,  # ottoman
-        110, # stool
-    ],
-    
-    # Kitchen appliances and fixtures
-    'kitchen_appliances': [
-        50,  # refrigerator
-        47,  # sink
-        65,  # toilet
-        37,  # bathtub
-        71,  # stove
-        118, # oven
-        124, # microwave
-        125, # pot
-        129, # dishwasher
-        107, # washer
+        23,  # sofa
+        24,  # shelf
+        31,  # armchair
+        32,  # seat
+        35,  # desk
+        36,  # wardrobe
+        37,  # lamp
+        38,  # bathtub
+        43,  # chest of drawers
+        48,  # refrigerator
+        50,  # fireplace
+        56,  # case
+        57,  # pool table
+        64,  # bookcase
+        66,  # coffee table
+        67,  # toilet
+        70,  # countertop
+        71,  # kitchen island
+        73,  # swivel chair
+        75,  # bar
+        80,  # ottoman
+        85,  # crib
+        93,  # bookshelf
+        120, # stool
+        121, # wardrobe
         146, # radiator
     ],
     
-    # Lighting fixtures
-    'lighting': [
-        36,  # lamp
-        82,  # light
-        85,  # chandelier
-        134, # sconce
+    # Vehicles and transportation
+    'vehicle': [
+        20,  # car
+        74,  # boat
+        83,  # bus
+        86,  # truck
+        103, # airplane
+        109, # van
+        133, # streetlight (transportation infrastructure)
+    ],
+    
+    # Natural elements - landscape and vegetation
+    'nature': [
+        4,   # tree
+        9,   # grass
+        16,  # mountain
+        17,  # plant
+        21,  # water
+        26,  # sea
+        29,  # field
+        33,  # fence
+        34,  # rock
+        46,  # sand
+        59,  # river
+        68,  # flower
+        69,  # hill
+        72,  # palm
+        94,  # fruit
+        130, # pole
+    ],
+    
+    # Sky and atmospheric elements  
+    'sky': [
+        2,   # sky
+    ],
+    
+    # Living beings
+    'living': [
+        12,  # person
+        91,  # animal
+        107, # dog
+        127, # horse
+        132, # cow
+    ],
+    
+    # Textiles and soft materials
+    'textile': [
+        18,  # curtain
+        28,  # rug
+        40,  # cushion
+        58,  # pillow
+        114, # blanket
+        118, # towel
+        124, # napkin
     ],
     
     # Windows and transparent surfaces
-    'windows_glass': [
+    'transparent': [
         8,   # windowpane
         27,  # mirror
+        47,  # sink
+        96,  # window
         147, # glass
     ],
     
-    # Electronics and screens
+    # Electronic and technical objects
     'electronics': [
-        74,  # computer
-        78,  # arcade machine
-        89,  # television receiver
-        130, # screen
+        72,  # computer
+        76,  # arcade machine
         141, # crt screen
         143, # monitor
         148, # clock
     ],
     
-    # Soft furnishings and textiles
-    'soft_furnishings': [
-        18,  # curtain
-        28,  # rug
-        39,  # cushion
-        57,  # pillow
-        81,  # towel
-        131, # blanket
-    ],
-    
-    # Decorative objects and art
-    'decorative_objects': [
+    # Decorative and art objects
+    'decoration': [
         22,  # painting
-        92,  # apparel
-        100, # poster
-        132, # sculpture
-        135, # vase
+        78,  # apparel
+        88,  # chandelier
+        98,  # sconce
+        99,  # vase
+        119, # sculpture
+        122, # sculpture  
         142, # plate
         149, # flag
-    ],
-    
-    # Books and media
-    'books_media': [
-        67,  # book
-        144, # bulletin board
-    ],
-    
-    # Kitchen items and containers
-    'kitchen_items': [
-        98,  # bottle
-        115, # bag
-        120, # food
-        137, # tray
-        138, # ashcan
-    ],
-    
-    # Plants and natural elements (indoor)
-    'indoor_plants': [
-        17,  # plant
-        66,  # flower
-    ],
-    
-    # People and living beings
-    'living_beings': [
-        12,  # person
-        126, # animal
-    ],
-    
-    # Bathroom fixtures
-    'bathroom_fixtures': [
-        145, # shower
-    ],
-    
-    # Doors and screens
-    'doors_screens': [
-        58,  # screen door
-        63,  # blind
-    ],
-    
-    # Base and structural supports
-    'supports_bases': [
-        40,  # base
-        41,  # box
-        42,  # column
-    ],
-    
-    # Outdoor elements (visible through windows/doors)
-    'outdoor_elements': [
-        4,   # tree
-        6,   # road
-        9,   # grass
-        11,  # sidewalk
-        13,  # earth
-        16,  # mountain
-        21,  # water
-        25,  # house
-        26,  # sea
-        29,  # field
-        32,  # fence
-        34,  # rock
-        46,  # sand
-        48,  # skyscraper
-        52,  # path
-        54,  # runway
-        60,  # river
-        61,  # bridge
-        68,  # hill
-        72,  # palm
-        79,  # hovel
-        84,  # tower
-        86,  # awning
-        87,  # streetlight
-        88,  # booth
-        93,  # pole
-        94,  # land
-        96,  # escalator
-        103, # ship
-        104, # fountain
-        109, # swimming pool
-        111, # barrel
-        113, # waterfall
-        114, # tent
-        116, # minibike
-        122, # tank
-        127, # bicycle
-        128, # lake
-        136, # traffic light
-        140, # pier
-    ],
-    
-    # Sky (visible through windows)
-    'sky': [
-        2,   # sky
-    ],
-    
-    # Vehicles (less common indoors)
-    'vehicles': [
-        20,  # car
-        76,  # boat
-        80,  # bus
-        83,  # truck
-        90,  # airplane
-        102, # van
-    ],
-    
-    # Entertainment and games
-    'entertainment': [
-        56,  # pool table
-        108, # plaything
-        119, # ball
-    ],
-    
-    # Commercial/industrial items
-    'commercial_items': [
-        43,  # signboard
-        45,  # counter
-        51,  # grandstand
-        101, # stage
-        105, # conveyer belt
-        106, # canopy
-        123, # trade name
-        139, # fan
     ]
 }
 

@@ -84,13 +84,6 @@ def parse_args():
                        help="Semantic segmentation model to use.")
     parser.add_argument("--semantic_batch_size", type=int, default=4,
                        help="Batch size for semantic segmentation.")
-    
-    
-    # Advanced Geometric Filtering
-    parser.add_argument("--use_advanced_geometric", action="store_true",
-                       help="Enable advanced geometric filtering with stricter MAGSAC parameters.")
-    parser.add_argument("--geometric_strict_mode", action="store_true", default=True,
-                       help="Use stricter geometric verification parameters for indoor scenes.")
 
     
     # Device and performance
@@ -199,8 +192,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'use_semantics': args.use_semantics,
             'semantic_model': args.semantic_model,
             'semantic_batch_size': args.semantic_batch_size,
-            'use_advanced_geometric': args.use_advanced_geometric,
-            'geometric_strict_mode': args.geometric_strict_mode,
             'copy_to_3dgs_dir': args.copy_to_3dgs_dir,
             'scale_recovery': args.scale_recovery,
             'high_quality': args.high_quality,
@@ -227,9 +218,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info(f"GPU brute force matching: {kwargs.get('use_brute_force', True)}")
     logger.info(f"High quality mode: {kwargs.get('high_quality', False)}")
     logger.info(f"Use semantics: {kwargs.get('use_semantics', False)}")
-    logger.info(f"Use advanced geometric: {kwargs.get('use_advanced_geometric', False)}")
-    if kwargs.get('use_advanced_geometric', False):
-        logger.info(f"Geometric strict mode: {kwargs.get('geometric_strict_mode', True)}")
 
     # Performance tracking
     start_time = time.time()
@@ -567,54 +555,29 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         
         cleanup_gpu_memory(device, "feature matching")
     
-    # Stage 5: Match Filtering (Semantic, Spatial, or Advanced Geometric)
+    # Stage 5: Semantic Match Filtering
     verified_matches = matches
-    verifier = GeometricVerification()
-    
-    # Apply semantic filtering if enabled
     if kwargs.get('use_semantics', False) and semantic_masks is not None:
-        logger.info("Stage 5a: Applying semantic filtering to matches...")
+        logger.info("Stage 5: Applying semantic filtering to matches...")
         stage_start = time.time()
         
-        verified_matches = verifier.filter_by_semantics(verified_matches, features, semantic_masks)
+        verifier = GeometricVerification()
+        verified_matches = verifier.filter_by_semantics(matches, features, semantic_masks)
         
         stage_times['semantic_filtering'] = time.time() - stage_start
         logger.info(f"Semantic filtering completed in {stage_times['semantic_filtering']:.2f}s")
+        
+        # Clean up verifier memory
+        if 'verifier' in locals():
+            try:
+                del verifier
+            except Exception as e:
+                logger.warning(f"Error cleaning up verifier: {e}")
+        
+        cleanup_gpu_memory(device, "semantic filtering")
     else:
-        logger.info("Stage 5a: Skipping semantic filtering.")
+        logger.info("Stage 5: Skipping semantic filtering.")
         stage_times['semantic_filtering'] = 0.0
-    
-    # Stage 5b: Spatial filtering removed (interferes with multiview matching)
-    logger.info("Stage 5b: Spatial filtering disabled (removed for better multiview support).")
-    stage_times['spatial_filtering'] = 0.0
-    
-    # Apply advanced geometric filtering if enabled
-    if kwargs.get('use_advanced_geometric', False):
-        logger.info("Stage 5b: Applying advanced geometric filtering to matches...")
-        stage_start = time.time()
-        
-        strict_mode = kwargs.get('geometric_strict_mode', True)
-        verified_matches = verifier.advanced_geometric_filter(
-            verified_matches, features, 
-            strict_mode=strict_mode, 
-            progressive_filtering=True
-        )
-        
-        geometric_time = time.time() - stage_start
-        stage_times['advanced_geometric'] = geometric_time
-        logger.info(f"Advanced geometric filtering completed in {geometric_time:.2f}s")
-    else:
-        logger.info("Stage 5b: Skipping advanced geometric filtering.")
-        stage_times['advanced_geometric'] = 0.0
-    
-    # Clean up verifier memory
-    if 'verifier' in locals():
-        try:
-            del verifier
-        except Exception as e:
-            logger.warning(f"Error cleaning up verifier: {e}")
-    
-    cleanup_gpu_memory(device, "match filtering")
 
     # Stage 6: COLMAP-based SfM reconstruction using binary (avoid pycolmap CUDA issues)
     logger.info("Stage 6: COLMAP-based SfM reconstruction using binary...")
