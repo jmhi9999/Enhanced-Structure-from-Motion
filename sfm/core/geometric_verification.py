@@ -56,19 +56,19 @@ class GeometricVerification:
             self.confidence = config.get('confidence', 0.999)  # 99.9% 확신
             self.max_iterations = config.get('max_iterations', 20000)  # 더 많은 시도
             self.threshold = config.get('threshold', 0.8)  # 매우 엄격한 0.8픽셀
-            self.min_matches = config.get('min_matches', 12)  # 더 많은 매치 요구
+            self.min_matches = config.get('min_matches', 15)  # 균형잡힌 매치 요구
         elif config_or_method is None or isinstance(config_or_method, RANSACMethod):
             self.method = config_or_method or RANSACMethod.OPENCV_MAGSAC
             self.confidence = kwargs.get('confidence', 0.999)  # 99.9% 확신
             self.max_iterations = kwargs.get('max_iterations', 20000)  # 더 많은 시도
             self.threshold = kwargs.get('threshold', 0.8)  # 매우 엄격한 0.8픽셀
-            self.min_matches = kwargs.get('min_matches', 12)  # 더 많은 매치 요구
+            self.min_matches = kwargs.get('min_matches', 15)  # 균형잡힌 매치 요구
         else:
             self.method = RANSACMethod.OPENCV_MAGSAC
             self.confidence = kwargs.get('confidence', 0.999)  # 99.9% 확신
             self.max_iterations = kwargs.get('max_iterations', 20000)  # 더 많은 시도
             self.threshold = kwargs.get('threshold', 0.8)  # 매우 엄격한 0.8픽셀
-            self.min_matches = kwargs.get('min_matches', 12)  # 더 많은 매치 요구
+            self.min_matches = kwargs.get('min_matches', 15)  # 균형잡힌 매치 요구
         
         self.device = device or (torch.device('cuda') if GPU_AVAILABLE else torch.device('cpu'))
         self._init_method(**kwargs)
@@ -146,8 +146,8 @@ class GeometricVerification:
                     label1 = mask1[y1, x1]
                     label2 = mask2[y2, x2]
 
-                    # Keep match if labels belong to same coarse semantic group
-                    if are_semantically_compatible(int(label1), int(label2)):
+                    # Keep match if labels belong to same coarse semantic group (balanced filtering)
+                    if are_semantically_compatible(int(label1), int(label2), strict_mode=False):
                         good_indices.append(i)
 
             if len(good_indices) < self.min_matches:

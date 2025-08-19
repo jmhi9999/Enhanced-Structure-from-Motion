@@ -177,17 +177,20 @@ def get_coarse_semantic_label(class_id: int) -> str:
     """
     return CLASS_TO_COARSE_GROUP.get(class_id, 'objects')
 
-def are_semantically_compatible(class_id1: int, class_id2: int) -> bool:
+def are_semantically_compatible(class_id1: int, class_id2: int, strict_mode: bool = False) -> bool:
     """
     Check if two ADE20K classes belong to the same coarse semantic group
     
     Args:
         class_id1: First class ID
         class_id2: Second class ID
+        strict_mode: If True, require exact label match; if False, use coarse groups
         
     Returns:
         bool: True if classes are semantically compatible
     """
+    if strict_mode:
+        return class_id1 == class_id2
     return get_coarse_semantic_label(class_id1) == get_coarse_semantic_label(class_id2)
 
 def get_semantic_group_info():

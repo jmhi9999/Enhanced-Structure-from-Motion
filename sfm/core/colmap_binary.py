@@ -24,7 +24,7 @@ Point3D = namedtuple("Point3D", ["id", "xyz", "rgb", "error", "image_ids", "poin
 
 def filter_matches_with_magsac(features: Dict[str, Any], matches: Dict[Tuple[str, str], Any]) -> Dict[Tuple[str, str], Any]:
     """Filter matches using cv2.USAC_MAGSAC geometric verification with optimized parameters"""
-    logger.info("Filtering matches with cv2 USAC_MAGSAC (optimized parameters: threshold=3.0, confidence=0.99, maxIters=500)...")
+    logger.info("Filtering matches with cv2 USAC_MAGSAC (strict parameters: threshold=1.5, confidence=0.999, maxIters=1000)...")
     
     filtered_matches = {}
     
@@ -58,9 +58,9 @@ def filter_matches_with_magsac(features: Dict[str, Any], matches: Dict[Tuple[str
                 matched_kpts1.astype(np.float32),
                 matched_kpts2.astype(np.float32),
                 method=cv2.USAC_MAGSAC,
-                ransacReprojThreshold=3.0,  # Improved: 1.0 -> 3.0 (less restrictive)
-                confidence=0.99,            # Improved: 0.999 -> 0.99 (balanced)
-                maxIters=500               # Improved: 10000 -> 500 (10x faster)
+                ransacReprojThreshold=1.5,  # Stricter: 3.0 -> 1.5 (more restrictive)
+                confidence=0.999,           # Stricter: 0.99 -> 0.999 (higher confidence)
+                maxIters=1000              # Balanced: 500 -> 1000 (better quality)
             )
             
             if F_matrix is None or inlier_mask is None:
@@ -68,7 +68,7 @@ def filter_matches_with_magsac(features: Dict[str, Any], matches: Dict[Tuple[str
             
             # Keep only inlier matches
             inlier_mask = inlier_mask.ravel().astype(bool)
-            if inlier_mask.sum() < 4:  # Need minimum matches
+            if inlier_mask.sum() < 8:  # Need minimum matches (stricter)
                 continue
             
             # Update match data with filtered matches
