@@ -268,7 +268,15 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -
         "--database_path", str(database_path),
         "--image_path", str(image_dir),
         "--output_path", str(sparse_path),
-        "--Mapper.num_threads", "16"
+        "--Mapper.num_threads", "16",
+        # GPU 가속 Bundle Adjustment + 안전한 최적화
+        "--Mapper.ba_global_use_pba", "1",  # GPU Bundle Adjustment 활성화
+        "--Mapper.ba_local_use_pba", "1",   # Local BA도 GPU 사용
+        "--Mapper.ba_local_max_num_iterations", "15",  # GPU로 더 빠르므로 감소 가능
+        "--Mapper.ba_global_max_num_iterations", "25",  # GPU로 더 빠르므로 감소 가능
+        "--Mapper.max_num_models", "1",  # 단일 모델
+        "--Mapper.max_model_overlap", "10",  # GPU 가속으로 더 aggressive 가능
+        "--Mapper.min_num_matches", "15"  # 기본값 유지
     ]
     
     try:
