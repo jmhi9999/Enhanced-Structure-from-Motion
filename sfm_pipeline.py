@@ -88,14 +88,16 @@ def parse_args():
     # Semantic Segmentation
     parser.add_argument("--use_semantics", action="store_true",
                        help="Enable semantic segmentation for filtering matches.")
+    parser.add_argument("--semantic_light_filtering", action="store_true", default=False,
+                       help="Use very light semantic filtering (preserves most matches, minimal regularization)")
     parser.add_argument("--semantic_model", type=str, default="nvidia/segformer-b4-finetuned-ade-512-512",
                        help="Semantic segmentation model to use.")
     parser.add_argument("--semantic_batch_size", type=int, default=4,
                        help="Batch size for semantic segmentation.")
-    parser.add_argument("--semantic_strict_mode", action="store_true", default=True,
+    parser.add_argument("--semantic_strict_mode", action="store_true", default=False,
                        help="Enable strict semantic filtering mode (higher precision)")
-    parser.add_argument("--semantic_consistency_threshold", type=float, default=0.7,
-                       help="Semantic consistency threshold for match filtering (0.0-1.0)")
+    parser.add_argument("--semantic_consistency_threshold", type=float, default=0.4,
+                       help="Semantic consistency threshold for match filtering (0.0-1.0, lower = more permissive)")
 
     
     # Device and performance
@@ -202,6 +204,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'fusion_weight': getattr(args, 'fusion_weight', 0.7),
             'bilateral_filter': getattr(args, 'bilateral_filter', False),
             'use_semantics': args.use_semantics,
+            'semantic_light_filtering': args.semantic_light_filtering,
             'semantic_model': args.semantic_model,
             'semantic_batch_size': args.semantic_batch_size,
             'semantic_strict_mode': args.semantic_strict_mode,
@@ -502,9 +505,10 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'output_path': str(output_path),
             # Semantic filtering configuration
             'use_semantic_filtering': kwargs.get('use_semantics', False),
-            'semantic_consistency_threshold': kwargs.get('semantic_consistency_threshold', 0.7),
-            'min_consistent_matches': 15,
-            'semantic_strict_mode': kwargs.get('semantic_strict_mode', True),
+            'semantic_light_filtering': kwargs.get('semantic_light_filtering', False),
+            'semantic_consistency_threshold': kwargs.get('semantic_consistency_threshold', 0.4),
+            'min_consistent_matches': 8,
+            'semantic_strict_mode': kwargs.get('semantic_strict_mode', False),
             'use_hierarchical_filtering': True
         }
         

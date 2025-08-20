@@ -23,10 +23,19 @@ class SemanticFilter:
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
         
-        # Filtering parameters
-        self.consistency_threshold = self.config.get('consistency_threshold', 0.7)  # 70% matches must be consistent
-        self.min_consistent_matches = self.config.get('min_consistent_matches', 15)  # Minimum consistent matches to keep pair
-        self.strict_mode = self.config.get('strict_mode', True)  # Enable strict semantic filtering
+        # Filtering parameters - MORE PERMISSIVE for better point cloud density
+        self.light_filtering = self.config.get('light_filtering', False)  # Ultra-light filtering mode
+        
+        if self.light_filtering:
+            # Ultra-light filtering - minimal regularization, preserves most matches
+            self.consistency_threshold = self.config.get('consistency_threshold', 0.2)  # Only 20% need to be consistent
+            self.min_consistent_matches = self.config.get('min_consistent_matches', 5)  # Very low minimum
+            self.strict_mode = False
+        else:
+            # Standard permissive filtering
+            self.consistency_threshold = self.config.get('consistency_threshold', 0.4)  # 40% matches must be consistent (was 70%)
+            self.min_consistent_matches = self.config.get('min_consistent_matches', 8)  # Minimum consistent matches to keep pair (was 15)
+            self.strict_mode = self.config.get('strict_mode', False)  # Disable strict semantic filtering by default
         
         # Semantic class compatibility matrix
         self._setup_class_compatibility()
@@ -121,7 +130,27 @@ class SemanticFilter:
         for terrain_class in terrain:
             self.compatibility_matrix[terrain_class].update(nature)
         
-        logger.info("Added special cross-group compatibility rules")
+        # MORE PERMISSIVE: Add cross-group compatibility for common scene elements
+        # Structures can match with nature (buildings with trees, etc.)
+        for struct_class in structures:
+            self.compatibility_matrix[struct_class].update(nature)
+        for nature_class in nature:
+            self.compatibility_matrix[nature_class].update(structures)
+        
+        # Vehicles can match with terrain and structures
+        vehicles = self.compatible_groups['vehicles']
+        for vehicle_class in vehicles:
+            if vehicle_class not in self.compatibility_matrix:
+                self.compatibility_matrix[vehicle_class] = set()
+            self.compatibility_matrix[vehicle_class].update(terrain)
+            self.compatibility_matrix[vehicle_class].update(structures)
+        
+        for terrain_class in terrain:
+            self.compatibility_matrix[terrain_class].update(vehicles)
+        for struct_class in structures:
+            self.compatibility_matrix[struct_class].update(vehicles)
+        
+        logger.info("Added MORE PERMISSIVE cross-group compatibility rules")
     
     def _get_semantic_labels_at_keypoints(self, keypoints: np.ndarray, semantic_mask: np.ndarray) -> np.ndarray:
         """

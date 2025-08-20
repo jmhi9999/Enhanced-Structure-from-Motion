@@ -69,9 +69,10 @@ class EnhancedLightGlueMatcher:
         self.semantic_filter = None
         if self.use_semantic_filtering and SEMANTIC_FILTERING_AVAILABLE:
             semantic_config = {
-                'consistency_threshold': self.config.get('semantic_consistency_threshold', 0.7),
-                'min_consistent_matches': self.config.get('min_consistent_matches', 15),
-                'strict_mode': self.config.get('semantic_strict_mode', True),
+                'light_filtering': self.config.get('semantic_light_filtering', False),
+                'consistency_threshold': self.config.get('semantic_consistency_threshold', 0.4),
+                'min_consistent_matches': self.config.get('min_consistent_matches', 8),
+                'strict_mode': self.config.get('semantic_strict_mode', False),
                 'use_hierarchical_filtering': self.config.get('use_hierarchical_filtering', True)
             }
             self.semantic_filter = SemanticFilter(semantic_config)
