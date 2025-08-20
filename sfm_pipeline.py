@@ -13,6 +13,14 @@ import gc
 from pathlib import Path
 from typing import Dict, List, Any
 
+# Phase 1 Performance enhancements
+try:
+    from sfm.core.performance_monitor import get_global_performance_monitor, profile_stage
+    PERFORMANCE_MONITORING_AVAILABLE = True
+except ImportError:
+    PERFORMANCE_MONITORING_AVAILABLE = False
+    profile_stage = lambda x, **kwargs: lambda: None
+
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -84,6 +92,10 @@ def parse_args():
                        help="Semantic segmentation model to use.")
     parser.add_argument("--semantic_batch_size", type=int, default=4,
                        help="Batch size for semantic segmentation.")
+    parser.add_argument("--semantic_strict_mode", action="store_true", default=True,
+                       help="Enable strict semantic filtering mode (higher precision)")
+    parser.add_argument("--semantic_consistency_threshold", type=float, default=0.7,
+                       help="Semantic consistency threshold for match filtering (0.0-1.0)")
 
     
     # Device and performance
@@ -192,6 +204,8 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'use_semantics': args.use_semantics,
             'semantic_model': args.semantic_model,
             'semantic_batch_size': args.semantic_batch_size,
+            'semantic_strict_mode': args.semantic_strict_mode,
+            'semantic_consistency_threshold': args.semantic_consistency_threshold,
             'copy_to_3dgs_dir': args.copy_to_3dgs_dir,
             'scale_recovery': args.scale_recovery,
             'high_quality': args.high_quality,
@@ -485,7 +499,13 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'use_vocabulary_tree': kwargs.get('use_vocab_tree', False),
             'max_pairs_per_image': kwargs.get('max_pairs_per_image', 20),
             'max_total_pairs': kwargs.get('max_total_pairs', None),
-            'output_path': str(output_path)
+            'output_path': str(output_path),
+            # Semantic filtering configuration
+            'use_semantic_filtering': kwargs.get('use_semantics', False),
+            'semantic_consistency_threshold': kwargs.get('semantic_consistency_threshold', 0.7),
+            'min_consistent_matches': 15,
+            'semantic_strict_mode': kwargs.get('semantic_strict_mode', True),
+            'use_hierarchical_filtering': True
         }
         
         # If vocabulary tree was used, pass the selected pairs to the matcher
@@ -508,7 +528,12 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             formatted_features[img_path] = formatted_feat
         
         # Use the enhanced matcher which processes features based on configuration
-        matches = matcher.match_features(formatted_features)
+        # Pass semantic masks if semantic filtering is enabled
+        if kwargs.get('use_semantics', False) and semantic_masks is not None:
+            logger.info("Using semantic-aware feature matching...")
+            matches = matcher.match_features(formatted_features, semantic_masks)
+        else:
+            matches = matcher.match_features(formatted_features)
         
         # Create tensor version for backup
         matches_tensors = {}
@@ -530,6 +555,21 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         logger.info(f"Saved match tensors to {matches_tensor_file}")
         
         stage_times['feature_matching'] = time.time() - stage_start
+        
+        # Log semantic filtering statistics if enabled
+        if kwargs.get('use_semantics', False) and 'matcher' in locals() and hasattr(matcher, 'semantic_filter') and matcher.semantic_filter:
+            semantic_stats = matcher.semantic_filter.get_filtering_stats()
+            logger.info("🎯 Semantic Filtering Results:")
+            logger.info(f"  Total pairs processed: {semantic_stats['total_pairs_processed']}")
+            logger.info(f"  Pairs filtered out: {semantic_stats['pairs_filtered_out']}")
+            logger.info(f"  Matches filtered out: {semantic_stats['matches_filtered_out']}")
+            logger.info(f"  Semantic consistency rate: {semantic_stats['semantic_consistency_rate']:.2%}")
+            
+            # Calculate filtering impact
+            if semantic_stats['total_pairs_processed'] > 0:
+                pair_retention_rate = (semantic_stats['total_pairs_processed'] - semantic_stats['pairs_filtered_out']) / semantic_stats['total_pairs_processed']
+                logger.info(f"  Pair retention rate: {pair_retention_rate:.2%}")
+                logger.info("  ✅ Semantic filtering successfully applied as regularization!")
         logger.info(f"Feature matching completed in {stage_times['feature_matching']:.2f}s")
         
         # Clean up matcher memory
@@ -555,32 +595,8 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         
         cleanup_gpu_memory(device, "feature matching")
     
-    # Stage 5: Semantic Match Filtering
-    verified_matches = matches
-    if kwargs.get('use_semantics', False) and semantic_masks is not None:
-        logger.info("Stage 5: Applying semantic filtering to matches...")
-        stage_start = time.time()
-        
-        verifier = GeometricVerification()
-        verified_matches = verifier.filter_by_semantics(matches, features, semantic_masks)
-        
-        stage_times['semantic_filtering'] = time.time() - stage_start
-        logger.info(f"Semantic filtering completed in {stage_times['semantic_filtering']:.2f}s")
-        
-        # Clean up verifier memory
-        if 'verifier' in locals():
-            try:
-                del verifier
-            except Exception as e:
-                logger.warning(f"Error cleaning up verifier: {e}")
-        
-        cleanup_gpu_memory(device, "semantic filtering")
-    else:
-        logger.info("Stage 5: Skipping semantic filtering.")
-        stage_times['semantic_filtering'] = 0.0
-
-    # Stage 6: COLMAP-based SfM reconstruction using binary (avoid pycolmap CUDA issues)
-    logger.info("Stage 6: COLMAP-based SfM reconstruction using binary...")
+    # Stage 5: COLMAP-based SfM reconstruction using binary (avoid pycolmap CUDA issues)
+    logger.info("Stage 5: COLMAP-based SfM reconstruction using binary...")
     stage_start = time.time()
     
     from sfm.core.colmap_binary import colmap_binary_reconstruction
@@ -591,7 +607,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     
     sparse_points, cameras, images = colmap_binary_reconstruction(
         features=features,
-        matches=verified_matches,  # Use semantically (and optionally geometrically) verified matches
+        matches=matches,  # Use semantically filtered matches
         output_path=output_path,
         image_dir=image_dir
     )

@@ -34,6 +34,13 @@ except ImportError:
     GPU_BRUTE_FORCE_AVAILABLE = False
     GPUBruteForceMatcher = None
 
+try:
+    from .semantic_filtering import SemanticFilter, filter_matches_with_semantics
+    SEMANTIC_FILTERING_AVAILABLE = True
+except ImportError:
+    SEMANTIC_FILTERING_AVAILABLE = False
+    SemanticFilter = filter_matches_with_semantics = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +63,19 @@ class EnhancedLightGlueMatcher:
         self.use_vocabulary_tree = use_vocabulary_tree
         self.feature_type = feature_type
         self.config = config or {}
+        
+        # Semantic filtering configuration
+        self.use_semantic_filtering = self.config.get('use_semantic_filtering', True)
+        self.semantic_filter = None
+        if self.use_semantic_filtering and SEMANTIC_FILTERING_AVAILABLE:
+            semantic_config = {
+                'consistency_threshold': self.config.get('semantic_consistency_threshold', 0.7),
+                'min_consistent_matches': self.config.get('min_consistent_matches', 15),
+                'strict_mode': self.config.get('semantic_strict_mode', True),
+                'use_hierarchical_filtering': self.config.get('use_hierarchical_filtering', True)
+            }
+            self.semantic_filter = SemanticFilter(semantic_config)
+            logger.info(f"Semantic filtering enabled with consistency threshold: {semantic_config['consistency_threshold']}")
         
         # Initialize GPU brute force matcher (preferred method)
         if self.use_brute_force and GPU_BRUTE_FORCE_AVAILABLE:
@@ -144,10 +164,10 @@ class EnhancedLightGlueMatcher:
                 self._setup_matcher()
     
     
-    def match_features(self, features: Dict[str, Any]) -> Dict[Tuple[str, str], Any]:
+    def match_features(self, features: Dict[str, Any], semantic_masks: Dict[str, np.ndarray] = None) -> Dict[Tuple[str, str], Any]:
         """
-        Enhanced feature matching using GPU tensor operations
-        Maximum performance with features kept in GPU memory
+        Enhanced feature matching using GPU tensor operations with semantic filtering
+        Maximum performance with features kept in GPU memory + semantic regularization
         """
         start_time = time.time()
         
@@ -200,6 +220,27 @@ class EnhancedLightGlueMatcher:
                 matches = self._match_pairs_parallel(features, pairs)
             else:
                 matches = self._match_pairs_sequential(features, pairs)
+        
+        # Apply semantic filtering if enabled and semantic masks available
+        if self.use_semantic_filtering and self.semantic_filter is not None and semantic_masks is not None:
+            logger.info("Applying semantic filtering for match regularization...")
+            semantic_start = time.time()
+            
+            # Get semantic statistics before filtering
+            pre_filter_stats = self.semantic_filter.get_semantic_statistics(matches, semantic_masks)
+            
+            # Apply hierarchical semantic filtering
+            matches = self.semantic_filter.filter_matches_hierarchical(matches, semantic_masks)
+            
+            # Get post-filtering statistics
+            post_filter_stats = self.semantic_filter.get_filtering_stats()
+            
+            semantic_time = time.time() - semantic_start
+            logger.info(f"Semantic filtering completed in {semantic_time:.2f}s")
+            logger.info(f"Semantic consistency rate: {post_filter_stats['semantic_consistency_rate']:.2f}")
+        else:
+            if self.use_semantic_filtering and semantic_masks is None:
+                logger.warning("Semantic filtering enabled but no semantic masks provided")
         
         total_time = time.time() - start_time
         self.timing_stats['total'].append(total_time)

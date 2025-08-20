@@ -194,11 +194,21 @@ class GPUBruteForceMatcher:
         self.matcher = None
         self._setup_matcher()
         
-        # Feature storage
+        # Feature storage with memory pool integration
         self.feature_storage = GPUTensorFeatureStorage(
             device, 
             max_features_per_image=self.config.get('max_features_per_image', 4096)
         )
+        
+        # GPU memory pool for tensor operations
+        try:
+            from .gpu_memory_pool import GPUMemoryPool
+            self.memory_pool = GPUMemoryPool(device, pool_size_mb=1024)
+            self.use_memory_pool = True
+            logger.info("GPU Memory Pool initialized for brute force matcher")
+        except ImportError:
+            self.memory_pool = None
+            self.use_memory_pool = False
         
         # Matching parameters
         self.batch_size = self.config.get('batch_size', 32)
