@@ -49,9 +49,6 @@ class BaseFeatureExtractor(ABC):
         image = image.astype(np.float32) / 255.0
         
         # Convert to tensor and add batch dimension
-        # Handle numpy 2.0 compatibility by ensuring contiguous array
-        if not image.flags['C_CONTIGUOUS']:
-            image = np.ascontiguousarray(image)
         image_tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0)
         return image_tensor.to(self.device)
     
