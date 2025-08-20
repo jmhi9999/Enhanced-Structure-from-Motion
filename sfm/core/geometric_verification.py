@@ -94,12 +94,12 @@ class GeometricVerification:
         Returns:
             Dict: A new dictionary containing only the semantically consistent matches.
         """
-        logger.info("Starting coarse semantic filtering of matches...")
+        logger.info("Starting EXACT semantic filtering of matches...")
         semantically_verified_matches = {}
         total_matches_before = sum(len(match_data['matches0']) for match_data in matches.values())
         total_matches_after = 0
         
-        for pair_key, match_data in tqdm(matches.items(), desc="Coarse Semantic Filtering"):
+        for pair_key, match_data in tqdm(matches.items(), desc="Exact Semantic Filtering"):
             # Handle both tuple and string keys
             if isinstance(pair_key, tuple):
                 img_path1, img_path2 = pair_key
@@ -165,10 +165,10 @@ class GeometricVerification:
             
             semantically_verified_matches[pair_key] = new_match_data
             total_matches_after += len(good_indices)
-            logger.debug(f"Pair {pair_key}: {len(good_indices)}/{len(matches0)} matches passed coarse semantic check.")
+            logger.debug(f"Pair {pair_key}: {len(good_indices)}/{len(matches0)} matches passed EXACT semantic check.")
 
         retention_rate = (total_matches_after / total_matches_before * 100) if total_matches_before > 0 else 0
-        logger.info(f"Coarse semantic filtering complete:")
+        logger.info(f"EXACT semantic filtering complete:")
         logger.info(f"  - Pairs: {len(semantically_verified_matches)}/{len(matches)} ({len(semantically_verified_matches)/len(matches)*100:.1f}%)")
         logger.info(f"  - Matches: {total_matches_after}/{total_matches_before} ({retention_rate:.1f}% retained)")
         return semantically_verified_matches

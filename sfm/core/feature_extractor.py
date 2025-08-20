@@ -49,7 +49,7 @@ class BaseFeatureExtractor(ABC):
         image = image.astype(np.float32) / 255.0
         
         # Convert to tensor and add batch dimension
-        image_tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0)
+        image_tensor = torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1).unsqueeze(0)
         return image_tensor.to(self.device)
     
     def clear_memory(self):
@@ -98,7 +98,7 @@ class SuperPointExtractor(BaseFeatureExtractor):
                 remove_borders=superpoint_conf["remove_borders"]
             ).eval().to(self.device)
         except ImportError as e:
-            raise ImportError(f"LightGlue SuperPoint not available: {e}. Try: conda install -c conda-forge pycolmap")
+            raise ImportError(f"LightGlue SuperPoint not available: {e}. Try: pip install lightglue @ git+https://github.com/cvg/LightGlue.git")
     
     def extract_features(self, images: List[Dict], batch_size: int = 8) -> Dict[str, Any]:
         """Extract SuperPoint features from images"""
@@ -162,7 +162,7 @@ class ALIKEDExtractor(BaseFeatureExtractor):
                 nms_radius=aliked_conf["nms_radius"]
             ).eval().to(self.device)
         except ImportError as e:
-            raise ImportError(f"LightGlue ALIKED not available: {e}. Try: conda install -c conda-forge pycolmap")
+            raise ImportError(f"LightGlue ALIKED not available: {e}. Try: pip install lightglue @ git+https://github.com/cvg/LightGlue.git")
     
     def extract_features(self, images: List[Dict], batch_size: int = 8) -> Dict[str, Any]:
         """Extract ALIKED features from images"""
@@ -229,7 +229,7 @@ class DISKExtractor(BaseFeatureExtractor):
                 pad_if_not_divisible=disk_conf["pad_if_not_divisible"]
             ).eval().to(self.device)
         except ImportError as e:
-            raise ImportError(f"LightGlue DISK not available: {e}. Try: conda install -c conda-forge pycolmap")
+            raise ImportError(f"LightGlue DISK not available: {e}. Try: pip install lightglue @ git+https://github.com/cvg/LightGlue.git")
     
     def extract_features(self, images: List[Dict], batch_size: int = 8) -> Dict[str, Any]:
         """Extract DISK features from images"""
