@@ -424,7 +424,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             device=device,
             config={
                 'vocab_size': 10000,
-                'vocab_depth': None,  # Dynamic depth calculation
+                'vocab_depth': 7,  # Fixed depth for better performance
                 'vocab_branching_factor': 10,
                 'max_keypoints': kwargs.get('max_keypoints', 4096)
             },
