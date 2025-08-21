@@ -178,6 +178,12 @@ class GPUVocabularyTree:
             except Exception as e:
                 logger.warning(f"Failed to load cached vocabulary: {e}")
         
+        # Calculate dynamic depth if not specified
+        num_images = len(all_features)
+        if self.depth is None:
+            self.depth = self._calculate_optimal_depth(num_images)
+            logger.info(f"Dynamic depth calculation: {num_images} images → depth={self.depth}")
+        
         logger.info("Building GPU-accelerated vocabulary tree...")
         start_time = time.time()
         
@@ -228,13 +234,8 @@ class GPUVocabularyTree:
         
         all_descriptors = np.vstack(descriptors_list)
         
-        # Calculate dynamic depth if not specified
-        num_images = len(image_paths)
-        if self.depth is None:
-            self.depth = self._calculate_optimal_depth(num_images)
-            logger.info(f"Dynamic depth calculation: {num_images} images → depth={self.depth}")
-        
         # Dynamic max_vocab_descriptors based on number of images and keypoints
+        num_images = len(all_features)
         max_vocab_descriptors = num_images * self.max_descriptors_per_image
         
         logger.info(f"Dynamic vocab limit: {num_images} images × {self.max_descriptors_per_image} keypoints = {max_vocab_descriptors:,} descriptors")
