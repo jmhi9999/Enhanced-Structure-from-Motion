@@ -62,7 +62,7 @@ class GPUVocabularyTree:
         config = config or {}
         self.device = device
         self.output_path = Path(output_path) if output_path else Path(".")
-        self.vocab_size = config.get('vocab_size', 10000)
+        self.vocab_size = config.get('vocab_size', 4000)  # Universal optimal size
         self.depth = config.get('vocab_depth', None)  # Will be calculated dynamically if None
         self.branching_factor = config.get('vocab_branching_factor', 10)
         
@@ -82,7 +82,7 @@ class GPUVocabularyTree:
         self.query_times = []
         
         # Validation parameters - sync with max_keypoints
-        self.max_keypoints = config.get('max_keypoints', 4096)
+        self.max_keypoints = config.get('max_keypoints', 1800)  # Universal optimal
         self.max_descriptors_per_image = config.get('max_descriptors_per_image', self.max_keypoints)
         # Dynamic max_vocab_descriptors based on number of images and keypoints
         self.max_vocab_descriptors = None  # Will be set dynamically in build_vocabulary

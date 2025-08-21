@@ -57,7 +57,7 @@ def parse_args():
                        help="Feature extractor to use")
     parser.add_argument("--max_image_size", type=int, default=1600,
                        help="Maximum image size for processing")
-    parser.add_argument("--max_keypoints", type=int, default=4096,
+    parser.add_argument("--max_keypoints", type=int, default=1800,
                        help="Maximum number of keypoints per image")
     
     # Matching and verification
@@ -65,7 +65,7 @@ def parse_args():
                        help="Use GPU brute force matching (default and recommended)")
     parser.add_argument("--use_vocab_tree", action="store_true",
                        help="Use vocabulary tree for smart pair selection (for very large datasets)")
-    parser.add_argument("--max_pairs_per_image", type=int, default=20,
+    parser.add_argument("--max_pairs_per_image", type=int, default=15,
                        help="Maximum pairs per image for vocabulary tree")
     parser.add_argument("--max_total_pairs", type=int, default=None,
                        help="Maximum total pairs for brute force matching")
@@ -104,13 +104,13 @@ def parse_args():
     # Device and performance
     parser.add_argument("--device", type=str, default="auto",
                        help="Device to use (auto, cpu, cuda)")
-    parser.add_argument("--num_workers", type=int, default=4,
+    parser.add_argument("--num_workers", type=int, default=8,
                        help="Number of workers for parallel processing")
-    parser.add_argument("--batch_size", type=int, default=8,
+    parser.add_argument("--batch_size", type=int, default=16,
                        help="Batch size for feature extraction")
     
     # Quality settings for 3DGS
-    parser.add_argument("--high_quality", action="store_true",
+    parser.add_argument("--high_quality", action="store_true", default=True,
                        help="Enable high-quality mode for 3DGS")
     parser.add_argument("--scale_recovery", action="store_true", default=True,
                        help="Enable scale recovery for consistent scene scale")

@@ -55,6 +55,10 @@ class ParameterSet:
     min_triangulation_angle: float = 2.0  # degrees
     max_reprojection_error: float = 4.0   # pixels
     min_track_length: int = 2
+    
+    # Feature extraction (NEW)
+    max_keypoints: int = 2048  # Reduced from 4096
+    vocab_size: int = 5000     # Reduced from 10000
 
 
 class AdaptiveParameterManager:
@@ -83,7 +87,9 @@ class AdaptiveParameterManager:
                 ba_max_iterations=300,
                 min_triangulation_angle=3.0,
                 max_reprojection_error=2.0,
-                min_track_length=3
+                min_track_length=3,
+                max_keypoints=1536,  # Conservative: fewer keypoints
+                vocab_size=3000      # Conservative: smaller vocab
             ),
             'balanced': ParameterSet(
                 confidence_threshold=0.1,
@@ -98,7 +104,9 @@ class AdaptiveParameterManager:
                 ba_max_iterations=200,
                 min_triangulation_angle=2.0,
                 max_reprojection_error=4.0,
-                min_track_length=2
+                min_track_length=2,
+                max_keypoints=2048,  # Balanced: moderate keypoints
+                vocab_size=5000      # Balanced: moderate vocab
             ),
             'permissive': ParameterSet(
                 confidence_threshold=0.05,
@@ -113,7 +121,9 @@ class AdaptiveParameterManager:
                 ba_max_iterations=100,
                 min_triangulation_angle=1.0,
                 max_reprojection_error=8.0,
-                min_track_length=2
+                min_track_length=2,
+                max_keypoints=3072,  # Permissive: more keypoints for hard cases
+                vocab_size=7000      # Permissive: larger vocab
             ),
             'experimental': ParameterSet(
                 confidence_threshold=0.01,
@@ -128,7 +138,9 @@ class AdaptiveParameterManager:
                 ba_max_iterations=50,
                 min_triangulation_angle=0.5,
                 max_reprojection_error=12.0,
-                min_track_length=2
+                min_track_length=2,
+                max_keypoints=4096,  # Experimental: maximum keypoints
+                vocab_size=10000     # Experimental: original large vocab
             )
         }
         
@@ -400,6 +412,10 @@ def create_adaptive_config(characteristics: ImageCharacteristics) -> Dict[str, A
         'min_triangulation_angle': params.min_triangulation_angle,
         'max_reprojection_error': params.max_reprojection_error,
         'min_track_length': params.min_track_length,
+        
+        # Feature extraction parameters
+        'max_keypoints': params.max_keypoints,
+        'vocab_size': params.vocab_size,
         
         # Enable adaptive mode
         'adaptive_mode': True,
