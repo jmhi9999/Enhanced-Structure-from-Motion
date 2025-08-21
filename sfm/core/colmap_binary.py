@@ -53,14 +53,14 @@ def filter_matches_with_magsac(features: Dict[str, Any], matches: Dict[Tuple[str
             if len(matched_kpts1) < 8:  # Need at least 8 points for fundamental matrix
                 continue
             
-            # Run MAGSAC with optimized parameters (2024 standard)
+            # Run MAGSAC with balanced parameters
             F_matrix, inlier_mask = cv2.findFundamentalMat(
                 matched_kpts1.astype(np.float32),
                 matched_kpts2.astype(np.float32),
                 method=cv2.USAC_MAGSAC,
-                ransacReprojThreshold=0.8,  # EXTREME: 1.5 -> 0.8 (매우 엄격)
-                confidence=0.9999,          # EXTREME: 0.999 -> 0.9999 (최대 확신)
-                maxIters=5000              # EXTREME: 1000 -> 5000 (최대 품질)
+                ransacReprojThreshold=2.0,  # Reasonable threshold (was 0.8, too strict)
+                confidence=0.999,           # Standard confidence (was 0.9999, too high)
+                maxIters=1000              # Efficient iterations (was 5000, too many)
             )
             
             if F_matrix is None or inlier_mask is None:
@@ -68,7 +68,7 @@ def filter_matches_with_magsac(features: Dict[str, Any], matches: Dict[Tuple[str
             
             # Keep only inlier matches
             inlier_mask = inlier_mask.ravel().astype(bool)
-            if inlier_mask.sum() < 15:  # Need minimum matches (EXTREME)
+            if inlier_mask.sum() < 8:  # Need minimum matches (was 15, too high)
                 continue
             
             # Update match data with filtered matches
@@ -274,7 +274,7 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -
         "--Mapper.ba_global_max_num_iterations", "35",  # 50->35 (안전한 가속)
         "--Mapper.max_num_models", "1",  # 단일 모델
         "--Mapper.max_model_overlap", "15",  # 20->15 (적당한 가속)
-        "--Mapper.min_num_matches", "15",  # 기본값 유지
+        "--Mapper.min_num_matches", "8",   # Reduced from 15 to 8
         "--Mapper.ba_global_images_ratio", "1.2",  # 메모리 효율성
         "--Mapper.ba_global_points_ratio", "1.2"  # 메모리 효율성
     ]
