@@ -93,14 +93,14 @@ class EnhancedLightGlueMatcher:
         else:
             self.vocabulary_tree = None
         
-        # Performance parameters (Optimal for outperforming hloc)
-        self.max_pairs_per_image = self.config.get('max_pairs_per_image', 15)  # Optimal: 15 vs hloc's brute force
+        # Performance parameters
+        self.max_pairs_per_image = self.config.get('max_pairs_per_image', 20)
         self.parallel_workers = min(self.config.get('parallel_workers', 8), torch.get_num_threads())
-        self.batch_size = self.config.get('batch_size', 16)  # Optimal batch size
+        self.batch_size = self.config.get('batch_size', 32)
         
-        # Matching parameters - Optimal thresholds from 2024 research
-        self.confidence_threshold = self.config.get('confidence_threshold', 0.15)  # Research-proven optimal
-        self.min_matches = self.config.get('min_matches', 12)  # Higher for robustness
+        # Matching parameters - More permissive for reconstruction
+        self.confidence_threshold = self.config.get('confidence_threshold', 0.1)
+        self.min_matches = self.config.get('min_matches', 4)
         
         # Timing statistics
         self.timing_stats = {
@@ -114,31 +114,21 @@ class EnhancedLightGlueMatcher:
     def _setup_matcher(self):
         """Setup LightGlue matcher"""
         try:
-            # LightGlue optimal configuration for outperforming hloc
+            # LightGlue configuration matching the provided format
             lightglue_conf = {
                 "features": self.feature_type,
-                # Optimal confidence settings from 2024 research
-                "depth_confidence": self.config.get('depth_confidence', 0.95),  # Good balance
-                "width_confidence": self.config.get('width_confidence', 0.99),   # High precision
-                "compile": self.config.get('compile', True),  # Enable compilation for speed
+                "depth_confidence": self.config.get('depth_confidence', 0.95),
+                "width_confidence": self.config.get('width_confidence', 0.99),
+                "compile": self.config.get('compile', False),
             }
             
-            # Initialize LightGlue with optimal settings
-            self.matcher = LightGlue(
-                features=lightglue_conf["features"], 
-                depth_confidence=lightglue_conf["depth_confidence"],
-                width_confidence=lightglue_conf["width_confidence"]
-            ).eval().to(self.device)
+            # LightGlue supports multiple extractors dynamically
+            self.matcher = LightGlue(features=lightglue_conf["features"], 
+                                   depth_confidence=lightglue_conf["depth_confidence"],
+                                   width_confidence=lightglue_conf["width_confidence"]).eval().to(self.device)
             
-            # Compile for 20-30% speed boost (critical for outperforming hloc)
-            if lightglue_conf["compile"] and hasattr(self.matcher, 'compile'):
-                try:
-                    self.matcher = torch.compile(self.matcher, mode='reduce-overhead')
-                    logger.info("✅ LightGlue compiled for optimal performance")
-                except Exception as e:
-                    logger.warning(f"LightGlue compilation failed (using uncompiled): {e}")
-            
-            logger.info(f"✅ LightGlue matcher initialized (features={self.feature_type})")
+            if lightglue_conf["compile"]:
+                self.matcher.compile()
                 
         except NameError:
             logger.error("LightGlue is not available. Please install it to use this matcher.")

@@ -62,8 +62,8 @@ class GPUVocabularyTree:
         config = config or {}
         self.device = device
         self.output_path = Path(output_path) if output_path else Path(".")
-        self.vocab_size = config.get('vocab_size', 4000)  # Universal optimal size
-        self.depth = config.get('vocab_depth', None)  # Will be calculated dynamically if None
+        self.vocab_size = config.get('vocab_size', 10000)
+        self.depth = config.get('vocab_depth', 6)
         self.branching_factor = config.get('vocab_branching_factor', 10)
         
         # FAISS GPU index for fast similarity search
@@ -81,46 +81,16 @@ class GPUVocabularyTree:
         self.build_time = 0.0
         self.query_times = []
         
-        # Validation parameters - sync with max_keypoints
-        self.max_keypoints = config.get('max_keypoints', 1800)  # Universal optimal
-        self.max_descriptors_per_image = config.get('max_descriptors_per_image', self.max_keypoints)
-        # Dynamic max_vocab_descriptors based on number of images and keypoints
-        self.max_vocab_descriptors = None  # Will be set dynamically in build_vocabulary
+        # Validation parameters
+        self.max_descriptors_per_image = config.get('max_descriptors_per_image', 2000)
+        self.max_vocab_descriptors = config.get('max_vocab_descriptors', 500000)
         self.min_cluster_size = config.get('min_cluster_size', 5)
         
         # Setup resources
         if self.use_gpu and self.gpu_available:
             self._setup_gpu_resources()
-    
-    def _calculate_optimal_depth(self, num_images: int) -> int:
-        """
-        Calculate optimal vocabulary tree depth based on number of images
-        
-        Args:
-            num_images: Number of images in dataset
-            
-        Returns:
-            Optimal depth for the vocabulary tree
-        """
-        # Rule of thumb based on research:
-        # - Small datasets (≤100 images): depth=4 (10K words)
-        # - Medium datasets (≤1000 images): depth=5 (100K words)
-        # - Large datasets (>1000 images): depth=6 (1M words)
-        
-        if num_images <= 100:
-            optimal_depth = 4
-        elif num_images <= 1000:
-            optimal_depth = 5
         else:
-            optimal_depth = 6
-        
-        # Calculate actual vocabulary size
-        vocab_capacity = self.branching_factor ** optimal_depth
-        
-        logger.info(f"Optimal depth for {num_images} images: depth={optimal_depth} "
-                   f"(vocab capacity: {vocab_capacity:,} words)")
-        
-        return optimal_depth
+            self._setup_cpu_resources()
     
     def _setup_gpu_resources(self):
         """Setup GPU resources for FAISS"""
@@ -178,12 +148,6 @@ class GPUVocabularyTree:
             except Exception as e:
                 logger.warning(f"Failed to load cached vocabulary: {e}")
         
-        # Calculate dynamic depth if not specified
-        num_images = len(all_features)
-        if self.depth is None:
-            self.depth = self._calculate_optimal_depth(num_images)
-            logger.info(f"Dynamic depth calculation: {num_images} images → depth={self.depth}")
-        
         logger.info("Building GPU-accelerated vocabulary tree...")
         start_time = time.time()
         
@@ -219,8 +183,8 @@ class GPUVocabularyTree:
                 try:
                     descriptors = future.result()
                     if descriptors is not None and len(descriptors) > 0:
-                        # Subsample descriptors to avoid memory issues - use max_keypoints setting
-                        max_desc_per_image = self.max_descriptors_per_image
+                        # Subsample descriptors to avoid memory issues
+                        max_desc_per_image = 1000
                         if len(descriptors) > max_desc_per_image:
                             indices = np.random.choice(len(descriptors), 
                                                      max_desc_per_image, replace=False)
@@ -234,13 +198,8 @@ class GPUVocabularyTree:
         
         all_descriptors = np.vstack(descriptors_list)
         
-        # Dynamic max_vocab_descriptors based on number of images and keypoints
-        num_images = len(all_features)
-        max_vocab_descriptors = num_images * self.max_descriptors_per_image
-        
-        logger.info(f"Dynamic vocab limit: {num_images} images × {self.max_descriptors_per_image} keypoints = {max_vocab_descriptors:,} descriptors")
-        
         # Subsample for vocabulary building if too many descriptors
+        max_vocab_descriptors = 1000000  # 1M descriptors max
         if len(all_descriptors) > max_vocab_descriptors:
             indices = np.random.choice(len(all_descriptors), 
                                      max_vocab_descriptors, replace=False)

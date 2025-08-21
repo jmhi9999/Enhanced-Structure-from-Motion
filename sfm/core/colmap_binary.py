@@ -53,14 +53,14 @@ def filter_matches_with_magsac(features: Dict[str, Any], matches: Dict[Tuple[str
             if len(matched_kpts1) < 8:  # Need at least 8 points for fundamental matrix
                 continue
             
-            # Run MAGSAC with universal optimal parameters
+            # Run MAGSAC with optimized parameters (2024 standard)
             F_matrix, inlier_mask = cv2.findFundamentalMat(
                 matched_kpts1.astype(np.float32),
                 matched_kpts2.astype(np.float32),
                 method=cv2.USAC_MAGSAC,
-                ransacReprojThreshold=2.5,  # Universal optimal threshold
-                confidence=0.995,           # Balanced confidence
-                maxIters=1500               # Efficient iterations
+                ransacReprojThreshold=0.8,  # EXTREME: 1.5 -> 0.8 (매우 엄격)
+                confidence=0.9999,          # EXTREME: 0.999 -> 0.9999 (최대 확신)
+                maxIters=5000              # EXTREME: 1000 -> 5000 (최대 품질)
             )
             
             if F_matrix is None or inlier_mask is None:

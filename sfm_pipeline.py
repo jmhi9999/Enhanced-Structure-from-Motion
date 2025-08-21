@@ -10,7 +10,6 @@ import os
 import sys
 import time
 import gc
-import traceback
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -57,7 +56,7 @@ def parse_args():
                        help="Feature extractor to use")
     parser.add_argument("--max_image_size", type=int, default=1600,
                        help="Maximum image size for processing")
-    parser.add_argument("--max_keypoints", type=int, default=1800,
+    parser.add_argument("--max_keypoints", type=int, default=4096,
                        help="Maximum number of keypoints per image")
     
     # Matching and verification
@@ -65,7 +64,7 @@ def parse_args():
                        help="Use GPU brute force matching (default and recommended)")
     parser.add_argument("--use_vocab_tree", action="store_true",
                        help="Use vocabulary tree for smart pair selection (for very large datasets)")
-    parser.add_argument("--max_pairs_per_image", type=int, default=15,
+    parser.add_argument("--max_pairs_per_image", type=int, default=20,
                        help="Maximum pairs per image for vocabulary tree")
     parser.add_argument("--max_total_pairs", type=int, default=None,
                        help="Maximum total pairs for brute force matching")
@@ -104,26 +103,18 @@ def parse_args():
     # Device and performance
     parser.add_argument("--device", type=str, default="auto",
                        help="Device to use (auto, cpu, cuda)")
-    parser.add_argument("--num_workers", type=int, default=8,
+    parser.add_argument("--num_workers", type=int, default=4,
                        help="Number of workers for parallel processing")
-    parser.add_argument("--batch_size", type=int, default=16,
+    parser.add_argument("--batch_size", type=int, default=8,
                        help="Batch size for feature extraction")
     
     # Quality settings for 3DGS
-    parser.add_argument("--high_quality", action="store_true", default=True,
+    parser.add_argument("--high_quality", action="store_true",
                        help="Enable high-quality mode for 3DGS")
     parser.add_argument("--scale_recovery", action="store_true", default=True,
                        help="Enable scale recovery for consistent scene scale")
     
-    # Robust pipeline settings
-    parser.add_argument("--use_robust_pipeline", action="store_true", default=True,
-                       help="Use robust pipeline with adaptive parameters and fallbacks (recommended)")
-    parser.add_argument("--max_pipeline_attempts", type=int, default=4,
-                       help="Maximum number of pipeline attempts with different parameters")
-    parser.add_argument("--force_conservative", action="store_true",
-                       help="Force conservative parameters (high quality, slower)")
-    parser.add_argument("--force_permissive", action="store_true",
-                       help="Force permissive parameters (faster, lower quality)")
+    
     
     # 3DGS Integration
     parser.add_argument("--copy_to_3dgs_dir", type=str, default=None,
@@ -221,10 +212,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'copy_to_3dgs_dir': args.copy_to_3dgs_dir,
             'scale_recovery': args.scale_recovery,
             'high_quality': args.high_quality,
-            'use_robust_pipeline': args.use_robust_pipeline,
-            'max_pipeline_attempts': args.max_pipeline_attempts,
-            'force_conservative': args.force_conservative,
-            'force_permissive': args.force_permissive,
             'device': args.device,
             'num_workers': args.num_workers,
             'batch_size': args.batch_size,
@@ -248,12 +235,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info(f"GPU brute force matching: {kwargs.get('use_brute_force', True)}")
     logger.info(f"High quality mode: {kwargs.get('high_quality', False)}")
     logger.info(f"Use semantics: {kwargs.get('use_semantics', False)}")
-    logger.info(f"Robust pipeline: {kwargs.get('use_robust_pipeline', True)}")
-
-    # Check if we should use the robust pipeline
-    if kwargs.get('use_robust_pipeline', True):
-        logger.info("🚀 Using Robust SfM Pipeline with adaptive parameters...")
-        return run_robust_sfm_pipeline(input_dir, output_dir, device, kwargs)
 
     # Performance tracking
     start_time = time.time()
@@ -443,9 +424,8 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             device=device,
             config={
                 'vocab_size': 10000,
-                'vocab_depth': 7,  # Fixed depth for better performance
-                'vocab_branching_factor': 10,
-                'max_keypoints': kwargs.get('max_keypoints', 4096)
+                'vocab_depth': 6,
+                'vocab_branching_factor': 10
             },
             output_path=str(output_path)
         )
@@ -829,195 +809,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         'total_time': total_time,
         'stage_times': stage_times
     }
-
-
-def run_robust_sfm_pipeline(input_dir: str, output_dir: str, device, config: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Run the robust SfM pipeline with adaptive parameters and fallbacks
-    """
-    from sfm.core.robust_pipeline import run_robust_pipeline
-    from sfm.core.adaptive_parameters import create_adaptive_config
-    from sfm.core.feature_extractor import FeatureExtractorFactory
-    from sfm.core.semantic_segmentation import SemanticSegmenter
-    from sfm.utils.io_utils import load_images
-    from sfm.utils.image_utils import resize_image
-    
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    start_time = time.time()
-    
-    try:
-        # Load and preprocess images
-        logger.info("Loading and preprocessing images...")
-        image_paths = load_images(input_dir)
-        logger.info(f"Found {len(image_paths)} images")
-        
-        processed_images = {}
-        for img_path in tqdm(image_paths, desc="Preprocessing images"):
-            img = resize_image(img_path, config.get('max_image_size', 1600))
-            processed_images[img_path] = img
-        
-        # Extract features
-        logger.info("Extracting features...")
-        feature_extractor = FeatureExtractorFactory.create(
-            config.get('feature_extractor', 'superpoint'),
-            device=device,
-            config={
-                'max_keypoints': config.get('max_keypoints', 4096),
-                'high_quality': config.get('high_quality', True)
-            }
-        )
-        
-        images_for_extraction = []
-        for img_path, img_array in processed_images.items():
-            images_for_extraction.append({
-                'image': img_array,
-                'path': img_path
-            })
-        
-        features = feature_extractor.extract_features(
-            images_for_extraction,
-            batch_size=config.get('batch_size', 8)
-        )
-        
-        # Clean up feature extractor
-        if hasattr(feature_extractor, 'clear_memory'):
-            feature_extractor.clear_memory()
-        del feature_extractor
-        cleanup_gpu_memory(device, "feature extraction")
-        
-        # Semantic segmentation (optional)
-        semantic_masks = None
-        if config.get('use_semantics', False):
-            logger.info("Running semantic segmentation...")
-            segmenter = SemanticSegmenter(
-                model_name=config.get('semantic_model', 'nvidia/segformer-b4-finetuned-ade-512-512'),
-                device=device
-            )
-            
-            semantic_masks = segmenter.segment_images_batch(
-                image_paths, 
-                batch_size=config.get('semantic_batch_size', 4)
-            )
-            
-            # Clean up segmenter
-            if hasattr(segmenter, 'clear_memory'):
-                segmenter.clear_memory()
-            del segmenter
-            cleanup_gpu_memory(device, "semantic segmentation")
-        
-        # Override parameters if forced
-        if config.get('force_conservative', False):
-            logger.info("🔒 Forcing conservative parameters")
-            config['parameter_preset'] = 'conservative'
-        elif config.get('force_permissive', False):
-            logger.info("🚀 Forcing permissive parameters")
-            config['parameter_preset'] = 'permissive'
-        
-        # Run robust pipeline
-        logger.info("Running robust SfM pipeline...")
-        result = run_robust_pipeline(
-            features=features,
-            image_paths=image_paths,
-            output_path=output_path,
-            device=device,
-            config=config,
-            semantic_masks=semantic_masks
-        )
-        
-        if not result.success:
-            logger.error(f"❌ Robust pipeline failed: {result.error_message}")
-            return {
-                'success': False,
-                'error': result.error_message,
-                'total_time': time.time() - start_time
-            }
-        
-        # Save results in COLMAP format
-        logger.info("Saving results...")
-        from sfm.utils.io_utils import save_colmap_format
-        
-        colmap_dir = output_path / "colmap"
-        colmap_dir.mkdir(exist_ok=True)
-        
-        save_colmap_format(
-            cameras=result.cameras,
-            images=result.images,
-            points3d=result.sparse_points,
-            output_dir=str(colmap_dir)
-        )
-        
-        # Copy files for 3DGS if requested
-        gs_input_dir = config.get('copy_to_3dgs_dir')
-        if gs_input_dir:
-            logger.info("Preparing files for 3DGS...")
-            try:
-                import shutil
-                gs_input_path = Path(gs_input_dir)
-                gs_sparse_dir = gs_input_path / "sparse" / "0"
-                gs_sparse_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Copy COLMAP files
-                sparse_dir = output_path / "sparse" / "0"
-                if sparse_dir.exists():
-                    for filename in ['cameras.bin', 'images.bin', 'points3D.bin']:
-                        src_file = sparse_dir / filename
-                        if src_file.exists():
-                            shutil.copy2(src_file, gs_sparse_dir / filename)
-                            logger.info(f"Copied {filename} to 3DGS directory")
-                
-                # Copy images
-                input_image_dir = Path(input_dir)
-                gs_images_dir = gs_input_path / "images"
-                if input_image_dir.exists():
-                    if gs_images_dir.exists():
-                        shutil.rmtree(gs_images_dir)
-                    shutil.copytree(input_image_dir, gs_images_dir)
-                    logger.info(f"Copied images to 3DGS directory")
-                
-                logger.info(f"✅ 3DGS files ready at: {gs_sparse_dir}")
-                
-            except Exception as e:
-                logger.warning(f"Failed to prepare files for 3DGS: {e}")
-        
-        total_time = time.time() - start_time
-        
-        # Final summary
-        logger.info("=" * 60)
-        logger.info("🎉 ROBUST SFM PIPELINE COMPLETED SUCCESSFULLY")
-        logger.info("=" * 60)
-        logger.info(f"Total time: {total_time:.2f}s")
-        logger.info(f"Number of images: {len(image_paths)}")
-        logger.info(f"Number of 3D points: {result.num_3d_points}")
-        logger.info(f"Number of cameras: {len(result.cameras) if result.cameras else 0}")
-        logger.info(f"Reconstruction coverage: {result.reconstruction_coverage:.1%}")
-        logger.info(f"Reconstruction quality: {result.reconstruction_quality:.2f}")
-        logger.info(f"Results saved to: {output_path}")
-        
-        return {
-            'success': True,
-            'sparse_points': result.sparse_points,
-            'cameras': result.cameras,
-            'images': result.images,
-            'total_time': total_time,
-            'quality_metrics': {
-                'reconstruction_coverage': result.reconstruction_coverage,
-                'reconstruction_quality': result.reconstruction_quality,
-                'num_3d_points': result.num_3d_points,
-                'avg_reprojection_error': result.avg_reprojection_error,
-                'success_rate': result.success_rate
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Critical error in robust pipeline: {e}")
-        logger.error(traceback.format_exc())
-        return {
-            'success': False,
-            'error': str(e),
-            'total_time': time.time() - start_time
-        }
 
 
 def main():
