@@ -49,7 +49,7 @@
 ### Quick Install
 ```bash
 # Clone repository
-git clone https://github.com/your-repo/Enhanced-Structure-from-Motion
+git clone https://github.com/jmhi9999/Enhanced-Structure-from-Motion
 cd Enhanced-Structure-from-Motion
 
 # Install dependencies
