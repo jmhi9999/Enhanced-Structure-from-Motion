@@ -1,14 +1,10 @@
 """
 Core SfM components
 """
-
-# Import core functions - some conditionally
 from .feature_extractor import FeatureExtractor
 from .feature_matcher import FeatureMatcher
 from .geometric_verification import GeometricVerification
-from .scale_recovery import ScaleRecovery
 
-# GPU modules - optional imports
 
 try:
     from .gpu_bundle_adjustment import GPUBundleAdjustment
@@ -49,10 +45,7 @@ def bundle_adjustment(points3d, cameras, config=None):
 
 
 
-def recover_scale(points3d, depth_maps, config=None):
-    """Recover scale from depth maps"""
-    scale_recovery = ScaleRecovery(config or {})
-    return scale_recovery.recover(points3d, depth_maps)
+# Removed recover_scale function
 
 # Build __all__ list dynamically based on available modules
 __all__ = [
@@ -60,13 +53,11 @@ __all__ = [
     "FeatureExtractor",
     "FeatureMatcher", 
     "GeometricVerification",
-    "ScaleRecovery",
     # Convenience functions
     "extract_features",
     "match_features", 
     "verify_geometry",
     "bundle_adjustment",
-    "recover_scale"
 ]
 
 # Add optional modules if available

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Enhanced SfM Pipeline for 3D Gaussian Splatting
-Optimized for high-quality camera poses and semantic robust points
+Simplified SfM Pipeline
+Core flow: Feature extraction -> Pair selection -> Matching -> MAGSAC -> COLMAP reconstruction
 """
 
 import argparse
@@ -13,13 +13,7 @@ import gc
 from pathlib import Path
 from typing import Dict, List, Any
 
-# Phase 1 Performance enhancements
-try:
-    from sfm.core.performance_monitor import get_global_performance_monitor, profile_stage
-    PERFORMANCE_MONITORING_AVAILABLE = True
-except ImportError:
-    PERFORMANCE_MONITORING_AVAILABLE = False
-    profile_stage = lambda x, **kwargs: lambda: None
+# Removed performance monitoring for simplicity
 
 import torch
 import numpy as np
@@ -34,7 +28,6 @@ from sfm.core.gpu_bundle_adjustment import GPUBundleAdjustment
 # Dense depth removed - generates too many points (10M+)
 # from sfm.core.dense_depth import DenseDepthEstimator
 from sfm.core.gpu_vocabulary_tree import GPUVocabularyTree
-from sfm.core.semantic_segmentation import SemanticSegmenter
 from sfm.utils.io_utils import save_colmap_format, load_images, save_features, save_matches
 from sfm.utils.image_utils import resize_image
 
@@ -56,16 +49,22 @@ def parse_args():
                        help="Feature extractor to use")
     parser.add_argument("--max_image_size", type=int, default=1600,
                        help="Maximum image size for processing")
-    parser.add_argument("--max_keypoints", type=int, default=4096,
-                       help="Maximum number of keypoints per image")
+    parser.add_argument("--max_keypoints", type=int, default=3500,
+                       help="Maximum number of keypoints per image (indoor-optimized)")
     
     # Matching and verification
     parser.add_argument("--use_brute_force", action="store_true", default=True,
                        help="Use GPU brute force matching (default and recommended)")
     parser.add_argument("--use_vocab_tree", action="store_true",
                        help="Use vocabulary tree for smart pair selection (for very large datasets)")
+    parser.add_argument("--use_multi_stage_selection", action="store_true", default=True,
+                       help="Use multi-stage pair selection (generous vocab tree + MAGSAC verification)")
+    parser.add_argument("--generous_multiplier", type=float, default=1.8,
+                       help="Multiplier for generous vocabulary tree stage")
+    parser.add_argument("--magsac_threshold", type=float, default=2.0,
+                       help="RANSAC threshold for MAGSAC verification (balanced for large datasets)")
     parser.add_argument("--max_pairs_per_image", type=int, default=20,
-                       help="Maximum pairs per image for vocabulary tree")
+                       help="Maximum pairs per image for vocabulary tree (optimized for large datasets)")
     parser.add_argument("--max_total_pairs", type=int, default=None,
                        help="Maximum total pairs for brute force matching")
     
@@ -85,19 +84,7 @@ def parse_args():
     parser.add_argument("--bilateral_filter", action="store_true",
                        help="Apply bilateral filtering to depth maps")
 
-    # Semantic Segmentation
-    parser.add_argument("--use_semantics", action="store_true",
-                       help="Enable semantic segmentation for filtering matches.")
-    parser.add_argument("--semantic_light_filtering", action="store_true", default=False,
-                       help="Use very light semantic filtering (preserves most matches, minimal regularization)")
-    parser.add_argument("--semantic_model", type=str, default="nvidia/segformer-b4-finetuned-ade-512-512",
-                       help="Semantic segmentation model to use.")
-    parser.add_argument("--semantic_batch_size", type=int, default=4,
-                       help="Batch size for semantic segmentation.")
-    parser.add_argument("--semantic_strict_mode", action="store_true", default=False,
-                       help="Enable strict semantic filtering mode (higher precision)")
-    parser.add_argument("--semantic_consistency_threshold", type=float, default=0.4,
-                       help="Semantic consistency threshold for match filtering (0.0-1.0, lower = more permissive)")
+    # Removed semantic segmentation parameters
 
     
     # Device and performance
@@ -111,8 +98,6 @@ def parse_args():
     # Quality settings for 3DGS
     parser.add_argument("--high_quality", action="store_true",
                        help="Enable high-quality mode for 3DGS")
-    parser.add_argument("--scale_recovery", action="store_true", default=True,
-                       help="Enable scale recovery for consistent scene scale")
     
     
     
@@ -120,9 +105,7 @@ def parse_args():
     parser.add_argument("--copy_to_3dgs_dir", type=str, default=None,
                        help="Directory to copy COLMAP sparse files for 3D Gaussian Splatting")
     
-    # Profiling
-    parser.add_argument("--profile", action="store_true",
-                       help="Enable performance profiling")
+    # Removed profiling
     
     return parser.parse_args()
 
@@ -195,6 +178,9 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'max_image_size': args.max_image_size,
             'use_brute_force': args.use_brute_force,
             'use_vocab_tree': args.use_vocab_tree,
+            'use_multi_stage_selection': args.use_multi_stage_selection,
+            'generous_multiplier': args.generous_multiplier,
+            'magsac_threshold': args.magsac_threshold,
             'max_pairs_per_image': args.max_pairs_per_image,
             'max_total_pairs': args.max_total_pairs,
             'use_gpu_ba': args.use_gpu_ba,
@@ -203,19 +189,11 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'depth_model': args.depth_model,
             'fusion_weight': getattr(args, 'fusion_weight', 0.7),
             'bilateral_filter': getattr(args, 'bilateral_filter', False),
-            'use_semantics': args.use_semantics,
-            'semantic_light_filtering': args.semantic_light_filtering,
-            'semantic_model': args.semantic_model,
-            'semantic_batch_size': args.semantic_batch_size,
-            'semantic_strict_mode': args.semantic_strict_mode,
-            'semantic_consistency_threshold': args.semantic_consistency_threshold,
             'copy_to_3dgs_dir': args.copy_to_3dgs_dir,
-            'scale_recovery': args.scale_recovery,
             'high_quality': args.high_quality,
             'device': args.device,
             'num_workers': args.num_workers,
             'batch_size': args.batch_size,
-            'profile': args.profile
         }
     else:
         # Direct function call mode
@@ -227,14 +205,13 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     setup_logging(str(output_path))
     
     logger.info("=" * 60)
-    logger.info("Enhanced SfM Pipeline")
+    logger.info("Simplified SfM Pipeline")
     logger.info("=" * 60)
     logger.info(f"Input directory: {input_dir}")
     logger.info(f"Output directory: {output_dir}")
     logger.info(f"Feature extractor: {kwargs.get('feature_extractor', 'superpoint')}")
     logger.info(f"GPU brute force matching: {kwargs.get('use_brute_force', True)}")
     logger.info(f"High quality mode: {kwargs.get('high_quality', False)}")
-    logger.info(f"Use semantics: {kwargs.get('use_semantics', False)}")
 
     # Performance tracking
     start_time = time.time()
@@ -259,67 +236,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     # Memory cleanup after preprocessing
     cleanup_gpu_memory(device, "preprocessing")
 
-    # Stage 1.5: Semantic Segmentation
-    semantic_masks = None
-    if kwargs.get('use_semantics', False):
-        logger.info("Stage 1.5: Semantic Segmentation...")
-        stage_start = time.time()
-        
-        mask_output_dir = output_path / "semantic_masks"
-        mask_output_dir.mkdir(exist_ok=True)
-        
-        # Caching: Check if all masks already exist
-        all_masks_exist = True
-        for img_path in image_paths:
-            mask_path = mask_output_dir / f"{Path(img_path).name}.png"
-            if not mask_path.exists():
-                all_masks_exist = False
-                break
-        
-        if all_masks_exist:
-            logger.info("Found existing semantic masks for all images, loading them.")
-            semantic_masks = {}
-            for img_path in tqdm(image_paths, desc="Loading semantic masks"):
-                mask_path = mask_output_dir / f"{Path(img_path).name}.png"
-                mask = np.array(Image.open(mask_path))
-                semantic_masks[img_path] = mask
-        else:
-            logger.info(f"Running semantic segmentation with SegFormer...")
-            
-            # Create SegFormer segmenter
-            from sfm.core.semantic_segmentation import SemanticSegmenter
-            segmenter = SemanticSegmenter(
-                model_name=kwargs.get('semantic_model', 'nvidia/segformer-b4-finetuned-ade-512-512'),
-                device=device
-            )
-            
-            semantic_masks = segmenter.segment_images_batch(
-                image_paths, 
-                batch_size=kwargs.get('semantic_batch_size', 4)
-            )
-            
-            # Save SegFormer masks
-            segmenter.save_masks(semantic_masks, str(mask_output_dir))
-            
-            # Log label info
-            label_info = segmenter.get_label_info()
-            logger.info(f"Semantic labels: {label_info.get('num_labels', 'unknown')} classes")
-
-        stage_times['semantic_segmentation'] = time.time() - stage_start
-        logger.info(f"Semantic segmentation completed in {stage_times['semantic_segmentation']:.2f}s")
-        
-        # Clean up segmentation model memory
-        if 'segmenter' in locals():
-            try:
-                if hasattr(segmenter, 'model'):
-                    del segmenter.model
-                if hasattr(segmenter, 'processor'):
-                    del segmenter.processor
-                del segmenter
-            except Exception as e:
-                logger.warning(f"Error cleaning up segmenter: {e}")
-        
-        cleanup_gpu_memory(device, "semantic segmentation")
+    # Removed semantic segmentation stage
 
     
     # Stage 2: Feature extraction
@@ -418,14 +335,30 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info("Stage 3: Smart pair selection...")
     stage_start = time.time()
     
-    if kwargs.get('use_vocab_tree', False):
+    # Check if pairs already exist
+    pairs_cache_file = output_path / "image_pairs.pkl"
+    image_pairs = None
+    
+    if pairs_cache_file.exists():
+        try:
+            import pickle
+            with open(pairs_cache_file, 'rb') as f:
+                image_pairs = pickle.load(f)
+            logger.info(f"Loaded cached {len(image_pairs)} image pairs")
+        except Exception as e:
+            logger.warning(f"Failed to load cached pairs: {e}")
+            image_pairs = None
+    
+    if image_pairs is None and kwargs.get('use_vocab_tree', False):
         # Use vocabulary tree for O(n log n) complexity
         vocab_tree = GPUVocabularyTree(
             device=device,
             config={
                 'vocab_size': 10000,
                 'vocab_depth': 6,
-                'vocab_branching_factor': 10
+                'vocab_branching_factor': 10,
+                'max_descriptors_per_image': 2000,  # Quality-first: top 2000 descriptors per image
+                'max_vocab_descriptors': 800000  # Balanced for quality and performance
             },
             output_path=str(output_path)
         )
@@ -433,14 +366,37 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         # Build vocabulary
         vocab_tree.build_vocabulary(features)
         
-        # Get smart pairs
-        image_pairs = vocab_tree.get_image_pairs_for_matching(
-            features,
-            max_pairs_per_image=kwargs.get('max_pairs_per_image', 20)
-        )
+        # Get smart pairs using multi-stage selection if enabled
+        use_multi_stage = kwargs.get('use_multi_stage_selection', True)
+        
+        if use_multi_stage:
+            logger.info("Using multi-stage pair selection...")
+            image_pairs = vocab_tree.get_multi_stage_pairs(
+                features,
+                generous_multiplier=kwargs.get('generous_multiplier', 2.5),
+                magsac_threshold=kwargs.get('magsac_threshold', 3.0),
+                ensure_connectivity=True,
+                skip_magsac=True  # Skip MAGSAC for now due to 0% pass rate
+            )
+        else:
+            logger.info("Using traditional vocabulary tree...")
+            image_pairs = vocab_tree.get_image_pairs_for_matching(
+                features,
+                max_pairs_per_image=kwargs.get('max_pairs_per_image', 20)
+            )
         
         logger.info(f"Selected {len(image_pairs)} pairs using vocabulary tree")
-    else:
+        
+        # Cache the pairs for future use
+        try:
+            import pickle
+            with open(pairs_cache_file, 'wb') as f:
+                pickle.dump(image_pairs, f)
+            logger.info(f"Cached {len(image_pairs)} pairs for future use")
+        except Exception as e:
+            logger.warning(f"Failed to cache pairs: {e}")
+            
+    elif image_pairs is None:
         # Fallback to exhaustive matching (slower)
         image_pairs = [(img1, img2) for i, img1 in enumerate(image_paths) 
                       for img2 in image_paths[i+1:]]
@@ -503,13 +459,12 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             'max_pairs_per_image': kwargs.get('max_pairs_per_image', 20),
             'max_total_pairs': kwargs.get('max_total_pairs', None),
             'output_path': str(output_path),
-            # Semantic filtering configuration
-            'use_semantic_filtering': kwargs.get('use_semantics', False),
-            'semantic_light_filtering': kwargs.get('semantic_light_filtering', False),
-            'semantic_consistency_threshold': kwargs.get('semantic_consistency_threshold', 0.4),
-            'min_consistent_matches': 8,
-            'semantic_strict_mode': kwargs.get('semantic_strict_mode', False),
-            'use_hierarchical_filtering': True
+            # Multi-stage selection configuration
+            'use_multi_stage_selection': kwargs.get('use_multi_stage_selection', True),
+            'generous_multiplier': kwargs.get('generous_multiplier', 2.5),
+            'magsac_threshold': kwargs.get('magsac_threshold', 3.0),
+            'magsac_workers': 8,
+            # Removed semantic filtering
         }
         
         # If vocabulary tree was used, pass the selected pairs to the matcher
@@ -531,13 +486,8 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
                     formatted_feat[key] = value
             formatted_features[img_path] = formatted_feat
         
-        # Use the enhanced matcher which processes features based on configuration
-        # Pass semantic masks if semantic filtering is enabled
-        if kwargs.get('use_semantics', False) and semantic_masks is not None:
-            logger.info("Using semantic-aware feature matching...")
-            matches = matcher.match_features(formatted_features, semantic_masks)
-        else:
-            matches = matcher.match_features(formatted_features)
+        # Use the matcher for feature matching
+        matches = matcher.match_features(formatted_features)
         
         # Create tensor version for backup
         matches_tensors = {}
@@ -560,20 +510,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         
         stage_times['feature_matching'] = time.time() - stage_start
         
-        # Log semantic filtering statistics if enabled
-        if kwargs.get('use_semantics', False) and 'matcher' in locals() and hasattr(matcher, 'semantic_filter') and matcher.semantic_filter:
-            semantic_stats = matcher.semantic_filter.get_filtering_stats()
-            logger.info("🎯 Semantic Filtering Results:")
-            logger.info(f"  Total pairs processed: {semantic_stats['total_pairs_processed']}")
-            logger.info(f"  Pairs filtered out: {semantic_stats['pairs_filtered_out']}")
-            logger.info(f"  Matches filtered out: {semantic_stats['matches_filtered_out']}")
-            logger.info(f"  Semantic consistency rate: {semantic_stats['semantic_consistency_rate']:.2%}")
-            
-            # Calculate filtering impact
-            if semantic_stats['total_pairs_processed'] > 0:
-                pair_retention_rate = (semantic_stats['total_pairs_processed'] - semantic_stats['pairs_filtered_out']) / semantic_stats['total_pairs_processed']
-                logger.info(f"  Pair retention rate: {pair_retention_rate:.2%}")
-                logger.info("  ✅ Semantic filtering successfully applied as regularization!")
         logger.info(f"Feature matching completed in {stage_times['feature_matching']:.2f}s")
         
         # Clean up matcher memory
@@ -611,7 +547,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     
     sparse_points, cameras, images = colmap_binary_reconstruction(
         features=features,
-        matches=matches,  # Use semantically filtered matches
+        matches=matches,
         output_path=output_path,
         image_dir=image_dir
     )
@@ -707,36 +643,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         stage_times['3dgs_preparation'] = time.time() - stage_start
         logger.info(f"3DGS preparation completed in {stage_times['3dgs_preparation']:.2f}s")
     
-    # Stage 9: Scale recovery (for 3DGS consistency)
-    if kwargs.get('scale_recovery', False):
-        logger.info("Stage 9: Scale recovery...")
-        stage_start = time.time()
-        
-        # Apply global scale recovery for consistent scene scale
-        from sfm.core.scale_recovery import ScaleRecovery
-        scale_recovery = ScaleRecovery(device=device)
-        
-        scaled_points, scaled_cameras = scale_recovery.recover_scale(
-            sparse_points, cameras, images
-        )
-        
-        # Update with scaled results
-        sparse_points = scaled_points
-        cameras = scaled_cameras
-        
-        stage_times['scale_recovery'] = time.time() - stage_start
-        logger.info(f"Scale recovery completed in {stage_times['scale_recovery']:.2f}s")
-        
-        # Clean up scale recovery memory
-        if 'scale_recovery' in locals():
-            try:
-                if hasattr(scale_recovery, 'clear_memory'):
-                    scale_recovery.clear_memory()
-                del scale_recovery
-            except Exception as e:
-                logger.warning(f"Error cleaning up scale recovery: {e}")
-        
-        cleanup_gpu_memory(device, "scale recovery")
+    # Removed scale recovery stage
     
     # Stage 10: Save results in COLMAP format (for 3DGS)
     logger.info("Stage 10: Saving results...")
@@ -763,18 +670,18 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     # Final summary
     total_time = time.time() - start_time
     logger.info("=" * 60)
-    logger.info("ENHANCED SFM PIPELINE COMPLETED")
+    logger.info("SIMPLIFIED SFM PIPELINE COMPLETED")
     logger.info("=" * 60)
     logger.info(f"Total time: {total_time:.2f}s")
     logger.info(f"Number of images: {len(image_paths)}")
     logger.info(f"Number of 3D points: {len(sparse_points)}")
     logger.info(f"Number of cameras: {len(cameras)}")
     
-    if kwargs.get('profile', False):
-        logger.info("\nPerformance breakdown:")
-        for stage, duration in stage_times.items():
-            percentage = (duration / total_time) * 100
-            logger.info(f"  {stage}: {duration:.2f}s ({percentage:.1f}%)")
+    # Show performance breakdown
+    logger.info("\nPerformance breakdown:")
+    for stage, duration in stage_times.items():
+        percentage = (duration / total_time) * 100
+        logger.info(f"  {stage}: {duration:.2f}s ({percentage:.1f}%)")
     
     logger.info(f"\nResults saved to: {output_path}")
     logger.info("Ready for 3D Gaussian Splatting!")
@@ -782,7 +689,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     # Final cleanup of all large variables
     cleanup_variables = [
         'processed_images', 'features', 'features_tensors', 'matches', 'matches_tensors',
-        'verified_matches', 'semantic_masks', 'image_paths'
+        'verified_matches', 'image_paths'
     ]
     
     for var_name in cleanup_variables:
@@ -805,7 +712,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         'cameras': cameras,
         'images': images,
         'features': None,  # Don't return large feature data to prevent memory retention
-        'scale_info': None,  # Avoid returning scale_recovery reference
         'total_time': total_time,
         'stage_times': stage_times
     }

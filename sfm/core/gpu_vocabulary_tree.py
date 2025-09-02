@@ -81,10 +81,15 @@ class GPUVocabularyTree:
         self.build_time = 0.0
         self.query_times = []
         
-        # Validation parameters
-        self.max_descriptors_per_image = config.get('max_descriptors_per_image', 2000)
+        # Adaptive validation parameters for performance
+        self.max_descriptors_per_image = config.get('max_descriptors_per_image', 3500)  # Indoor-optimized for SuperPoint
         self.max_vocab_descriptors = config.get('max_vocab_descriptors', 500000)
         self.min_cluster_size = config.get('min_cluster_size', 5)
+        
+        # Performance optimization settings
+        self.adaptive_sampling = config.get('adaptive_sampling', True)  # Smart descriptor selection
+        self.quality_threshold = config.get('quality_threshold', 0.01)  # Keep only high-quality descriptors
+        self.max_total_descriptors = config.get('max_total_descriptors', 1000000)  # Total limit for performance
         
         # Setup resources
         if self.use_gpu and self.gpu_available:
@@ -183,12 +188,17 @@ class GPUVocabularyTree:
                 try:
                     descriptors = future.result()
                     if descriptors is not None and len(descriptors) > 0:
-                        # Subsample descriptors to avoid memory issues
-                        max_desc_per_image = 1000
+                        # Smart descriptor selection for SfM quality
+                        max_desc_per_image = min(self.max_descriptors_per_image, 2000)  # Cap at 2000 for quality
                         if len(descriptors) > max_desc_per_image:
-                            indices = np.random.choice(len(descriptors), 
-                                                     max_desc_per_image, replace=False)
-                            descriptors = descriptors[indices]
+                            # Use score-based selection instead of random
+                            img_path = futures[future]
+                            scores = all_features[img_path].get('scores', np.ones(len(descriptors)))
+                            
+                            # Select top descriptors by score (quality-first)
+                            top_indices = np.argsort(scores)[-max_desc_per_image:]
+                            descriptors = descriptors[top_indices]
+                            logger.debug(f"Selected top {max_desc_per_image}/{len(scores)} descriptors for {Path(img_path).name}")
                         descriptors_list.append(descriptors)
                 except Exception as e:
                     logger.warning(f"Failed to extract descriptors: {e}")
@@ -198,8 +208,8 @@ class GPUVocabularyTree:
         
         all_descriptors = np.vstack(descriptors_list)
         
-        # Subsample for vocabulary building if too many descriptors
-        max_vocab_descriptors = 1000000  # 1M descriptors max
+        # Subsample for vocabulary building if too many descriptors (indoor-optimized)
+        max_vocab_descriptors = self.max_vocab_descriptors  # Use config value
         if len(all_descriptors) > max_vocab_descriptors:
             indices = np.random.choice(len(all_descriptors), 
                                      max_vocab_descriptors, replace=False)
@@ -457,6 +467,83 @@ class GPUVocabularyTree:
         
         return sorted_candidates[:top_k]
     
+    def get_generous_vocab_pairs(self, all_features: Dict[str, Any], 
+                               generous_multiplier: float = 1.8,
+                               min_score_threshold: float = 0.01) -> List[Tuple[str, str]]:
+        """
+        Stage 1: Generate generous vocabulary tree pairs with lower thresholds
+        This creates more candidate pairs that will be filtered by MAGSAC
+        """
+        logger.info("Stage 1: Generating generous vocabulary tree pairs...")
+        
+        if self.vocabulary is None:
+            logger.info("Building vocabulary first...")
+            self.build_vocabulary(all_features)
+        
+        image_pairs = set()
+        dataset_size = len(all_features)
+        
+        # Balanced k based on dataset size (less aggressive than before)
+        if dataset_size < 50:
+            generous_k = min(int(dataset_size * 0.5), dataset_size - 1)  # Moderate
+        elif dataset_size < 200:
+            generous_k = min(int(dataset_size * 0.25), 50)  # Less aggressive  
+        else:
+            generous_k = min(int(dataset_size * 0.15), 75)  # Conservative for large datasets
+        
+        logger.info(f"Using generous k={generous_k} for {dataset_size} images (multiplier: {generous_multiplier})")
+        
+        # Generate generous pairs with lower threshold
+        total_candidates = 0
+        total_above_threshold = 0
+        
+        for img_path, img_features in tqdm(all_features.items(), 
+                                          desc="Generating generous pairs"):
+            similar_images = self.query_similar_images(img_features, generous_k)
+            total_candidates += len(similar_images)
+            
+            # Use lower threshold for more candidates
+            for similar_img, score in similar_images:
+                if similar_img != img_path:
+                    if score >= min_score_threshold:
+                        pair = tuple(sorted([img_path, similar_img]))
+                        image_pairs.add(pair)
+                        total_above_threshold += 1
+        
+        logger.info(f"Generous pairs debug: {total_candidates} total candidates, "
+                   f"{total_above_threshold} above threshold ({min_score_threshold})")
+        
+        pairs_list = list(image_pairs)
+        logger.info(f"Stage 1 generated {len(pairs_list)} generous pairs")
+        
+        # Fallback: if no pairs found, use very low threshold
+        if len(pairs_list) == 0:
+            logger.info(f"No pairs found with threshold {min_score_threshold}, using all top-k pairs instead...")
+            
+            # Simplified fallback: just take top-k pairs without score threshold
+            for img_path, img_features in all_features.items():
+                similar_images = self.query_similar_images(img_features, min(generous_k, 10))  # Limit to top 10
+                for similar_img, score in similar_images:
+                    if similar_img != img_path:
+                        pair = tuple(sorted([img_path, similar_img]))
+                        image_pairs.add(pair)
+            
+            pairs_list = list(image_pairs)
+            logger.info(f"Stage 1 fallback generated {len(pairs_list)} generous pairs (no threshold)")
+        
+        # Ultimate fallback: if still no pairs, use traditional vocabulary tree
+        if len(pairs_list) == 0:
+            logger.warning("No generous pairs found, falling back to traditional vocabulary tree...")
+            pairs_list = self.get_image_pairs_for_matching(
+                all_features, 
+                max_pairs_per_image=min(generous_k, 50),
+                min_score_threshold=0.001,
+                ensure_connectivity=True
+            )
+            logger.info(f"Stage 1 ultimate fallback generated {len(pairs_list)} pairs")
+        
+        return pairs_list
+
     def get_image_pairs_for_matching(self, all_features: Dict[str, Any], 
                                    max_pairs_per_image: int = 20,
                                    min_score_threshold: float = 0.01,
@@ -583,6 +670,281 @@ class GPUVocabularyTree:
         
         expansion_count = len(expanded_pairs) - original_count
         logger.info(f"Expanded from {original_count} to {len(expanded_pairs)} pairs (+{expansion_count})")
+        
+        return list(expanded_pairs)
+    
+    def verify_pairs_with_magsac(self, pairs: List[Tuple[str, str]], 
+                               all_features: Dict[str, Any],
+                               ransac_threshold: float = 3.0,
+                               confidence: float = 0.99,
+                               max_iters: int = 500) -> List[Tuple[str, str]]:
+        """
+        Stage 2: Verify pairs using MAGSAC geometric verification
+        Filters out pairs that don't have geometric consistency
+        """
+        logger.info(f"Stage 2: MAGSAC verification of {len(pairs)} pairs...")
+        
+        verified_pairs = []
+        
+        # Use threading for parallel MAGSAC verification
+        magsac_workers = 8
+        if hasattr(self, 'config') and self.config:
+            magsac_workers = self.config.get('magsac_workers', 8)
+        
+        # Debug: sample a few pairs to understand why they're failing
+        sample_pairs = pairs[:min(5, len(pairs))]
+        logger.info(f"Debug: Testing {len(sample_pairs)} sample pairs for MAGSAC verification...")
+        for img1, img2 in sample_pairs:
+            is_valid = self._verify_single_pair_magsac(
+                img1, img2,
+                all_features[img1], all_features[img2],
+                ransac_threshold, confidence, max_iters
+            )
+            logger.info(f"Debug sample: {img1} <-> {img2}: {'PASS' if is_valid else 'FAIL'}")
+            
+        with ThreadPoolExecutor(max_workers=magsac_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._verify_single_pair_magsac,
+                    img1, img2, 
+                    all_features[img1], all_features[img2],
+                    ransac_threshold, confidence, max_iters
+                ): (img1, img2)
+                for img1, img2 in pairs
+            }
+            
+            for future in tqdm(as_completed(futures), total=len(futures), 
+                             desc="MAGSAC verification"):
+                img1, img2 = futures[future]
+                try:
+                    is_valid = future.result()
+                    if is_valid:
+                        verified_pairs.append((img1, img2))
+                except Exception as e:
+                    logger.warning(f"MAGSAC verification failed for {img1}-{img2}: {e}")
+        
+        verification_rate = (len(verified_pairs)/len(pairs)*100) if len(pairs) > 0 else 0.0
+        logger.info(f"Stage 2: {len(verified_pairs)}/{len(pairs)} pairs passed MAGSAC verification "
+                   f"({verification_rate:.1f}%)")
+        
+        return verified_pairs
+    
+    def _verify_single_pair_magsac(self, img1_path: str, img2_path: str,
+                                 feat1: Dict[str, Any], feat2: Dict[str, Any],
+                                 ransac_threshold: float = 3.0,
+                                 confidence: float = 0.99,
+                                 max_iters: int = 500) -> bool:
+        """
+        Verify single pair using MAGSAC with lightweight feature matching
+        Returns True if pair has geometric consistency
+        """
+        try:
+            # Extract features
+            kpts1 = feat1['keypoints']
+            kpts2 = feat2['keypoints']
+            desc1 = feat1['descriptors']
+            desc2 = feat2['descriptors']
+            
+            if isinstance(desc1, torch.Tensor):
+                desc1 = desc1.cpu().numpy()
+            if isinstance(desc2, torch.Tensor):
+                desc2 = desc2.cpu().numpy()
+            
+            # Quick feature matching using nearest neighbor (lightweight)
+            matches = self._fast_feature_matching(desc1, desc2, ratio_thresh=0.9)  # More permissive
+            
+            if len(matches) < 4:  # Reduced minimum matches requirement
+                logger.debug(f"MAGSAC {img1_path}-{img2_path}: Only {len(matches)} matches found, need >= 4")
+                return False
+            
+            # Get matched keypoints
+            src_pts = kpts1[matches[:, 0]]
+            dst_pts = kpts2[matches[:, 1]]
+            
+            # MAGSAC verification using cv2
+            try:
+                _, mask = cv2.findHomography(
+                    src_pts, dst_pts,
+                    method=cv2.USAC_MAGSAC,
+                    ransacReprojThreshold=ransac_threshold,
+                    confidence=confidence,
+                    maxIters=max_iters
+                )
+                
+                if mask is None:
+                    return False
+                
+                # Check inlier ratio - more permissive for vocabulary tree filtering
+                inlier_ratio = np.sum(mask) / len(mask)
+                min_inlier_ratio = 0.05  # Reduced to 5% inliers for initial filtering
+                
+                logger.debug(f"MAGSAC {img1_path}-{img2_path}: {len(matches)} matches, "
+                           f"inlier_ratio={inlier_ratio:.3f}, threshold={min_inlier_ratio}")
+                
+                return inlier_ratio >= min_inlier_ratio
+                
+            except cv2.error:
+                # Fallback to fundamental matrix if homography fails
+                _, mask = cv2.findFundamentalMat(
+                    src_pts, dst_pts,
+                    method=cv2.USAC_MAGSAC,
+                    ransacReprojThreshold=ransac_threshold,
+                    confidence=confidence,
+                    maxIters=max_iters
+                )
+                
+                if mask is None:
+                    return False
+                    
+                inlier_ratio = np.sum(mask) / len(mask)
+                return inlier_ratio >= 0.05  # Same reduced threshold
+                
+        except Exception as e:
+            logger.debug(f"MAGSAC verification error for {img1_path}-{img2_path}: {e}")
+            return False
+    
+    def _fast_feature_matching(self, desc1: np.ndarray, desc2: np.ndarray, 
+                             ratio_thresh: float = 0.9) -> np.ndarray:
+        """
+        Fast feature matching using nearest neighbor with ratio test
+        Lightweight matching for MAGSAC verification
+        """
+        try:
+            # Ensure descriptors have enough points
+            if len(desc1) < 2 or len(desc2) < 2:
+                return np.array([]).reshape(0, 2)
+            
+            # Use cv2 FLANN matcher for speed
+            FLANN_INDEX_KDTREE = 1
+            index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=4)
+            search_params = dict(checks=32)
+            
+            flann = cv2.FlannBasedMatcher(index_params, search_params)
+            matches = flann.knnMatch(desc1.astype(np.float32), desc2.astype(np.float32), k=2)
+            
+            # Apply Lowe's ratio test
+            good_matches = []
+            for match_pair in matches:
+                if len(match_pair) == 2:
+                    m, n = match_pair
+                    if m.distance < ratio_thresh * n.distance:
+                        good_matches.append([m.queryIdx, m.trainIdx])
+            
+            return np.array(good_matches) if good_matches else np.array([]).reshape(0, 2)
+            
+        except Exception as e:
+            # Fallback to brute force matching
+            try:
+                if len(desc1) < 2 or len(desc2) < 2:
+                    return np.array([]).reshape(0, 2)
+                    
+                bf = cv2.BFMatcher()
+                matches = bf.knnMatch(desc1.astype(np.float32), desc2.astype(np.float32), k=2)
+                
+                good_matches = []
+                for match_pair in matches:
+                    if len(match_pair) == 2:
+                        m, n = match_pair
+                        if m.distance < ratio_thresh * n.distance:
+                            good_matches.append([m.queryIdx, m.trainIdx])
+                
+                return np.array(good_matches) if good_matches else np.array([]).reshape(0, 2)
+            except Exception as e2:
+                logger.debug(f"Fast feature matching failed completely: {e2}")
+                return np.array([]).reshape(0, 2)
+    
+    def get_multi_stage_pairs(self, all_features: Dict[str, Any],
+                            generous_multiplier: float = 2.5,
+                            magsac_threshold: float = 3.0,
+                            ensure_connectivity: bool = True,
+                            skip_magsac: bool = False) -> List[Tuple[str, str]]:
+        """
+        Multi-stage robust pair selection: Generous Vocab Tree -> MAGSAC -> Adaptive Expansion
+        
+        Args:
+            all_features: Image features dictionary
+            generous_multiplier: Multiplier for generous vocabulary tree stage
+            magsac_threshold: RANSAC threshold for MAGSAC verification
+            ensure_connectivity: Ensure all images have at least one connection
+        """
+        logger.info("Starting multi-stage pair selection...")
+        
+        # Stage 1: Generous vocabulary tree
+        generous_pairs = self.get_generous_vocab_pairs(
+            all_features, 
+            generous_multiplier=generous_multiplier
+        )
+        
+        # Stage 2: MAGSAC verification (optional skip for debugging)
+        if skip_magsac:
+            logger.info("Stage 2: Skipping MAGSAC verification (debug mode)")
+            verified_pairs = generous_pairs
+        else:
+            verified_pairs = self.verify_pairs_with_magsac(
+                generous_pairs, 
+                all_features,
+                ransac_threshold=magsac_threshold
+            )
+        
+        # Stage 3: Adaptive expansion for connectivity
+        if ensure_connectivity:
+            final_pairs = self._ensure_connectivity_expansion(
+                verified_pairs, all_features
+            )
+        else:
+            final_pairs = verified_pairs
+        
+        # Performance statistics
+        total_generous = len(generous_pairs)
+        total_verified = len(verified_pairs)  
+        total_final = len(final_pairs)
+        
+        verification_rate = (total_verified / total_generous * 100) if total_generous > 0 else 0
+        expansion_rate = ((total_final - total_verified) / total_verified * 100) if total_verified > 0 else 0
+        
+        logger.info(f"Multi-stage selection completed:")
+        logger.info(f"  Stage 1 (Generous): {total_generous} pairs")
+        logger.info(f"  Stage 2 (MAGSAC): {total_verified} pairs ({verification_rate:.1f}% verified)")
+        logger.info(f"  Stage 3 (Expansion): {total_final} pairs (+{expansion_rate:.1f}% expansion)")
+        
+        return final_pairs
+    
+    def _ensure_connectivity_expansion(self, verified_pairs: List[Tuple[str, str]], 
+                                     all_features: Dict[str, Any]) -> List[Tuple[str, str]]:
+        """
+        Stage 3: Ensure connectivity by adding pairs for isolated images
+        """
+        # Count connections per image
+        connection_count = {}
+        for img1, img2 in verified_pairs:
+            connection_count[img1] = connection_count.get(img1, 0) + 1
+            connection_count[img2] = connection_count.get(img2, 0) + 1
+        
+        # Find isolated images (no connections)
+        isolated_images = []
+        for img_path in all_features.keys():
+            if connection_count.get(img_path, 0) == 0:
+                isolated_images.append(img_path)
+        
+        if not isolated_images:
+            logger.info("Stage 3: No isolated images found, connectivity ensured")
+            return verified_pairs
+        
+        logger.info(f"Stage 3: Found {len(isolated_images)} isolated images, expanding connections...")
+        
+        expanded_pairs = set(verified_pairs)
+        
+        # For each isolated image, find best vocabulary match and force connection
+        for img_path in isolated_images:
+            similar_images = self.query_similar_images(all_features[img_path], 3)
+            
+            # Add connection to best match
+            for similar_img, score in similar_images:
+                if similar_img != img_path:
+                    pair = tuple(sorted([img_path, similar_img]))
+                    expanded_pairs.add(pair)
+                    logger.debug(f"Added connectivity pair: {pair} (score: {score:.3f})")
+                    break
         
         return list(expanded_pairs)
     

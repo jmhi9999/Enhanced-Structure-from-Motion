@@ -283,111 +283,110 @@ class SuperPointExtractor(BaseFeatureExtractor):
         """Setup SuperPoint model"""
         try:
             # Import only SuperPoint, avoid SIFT module that needs pycolmap
-            import lightglue
             from lightglue.superpoint import SuperPoint
             
-            # SuperPoint configuration matching the provided format
-            superpoint_conf = {
-                "nms_radius": self.config.get('nms_radius', 4),
-                "keypoint_threshold": self.config.get('keypoint_threshold', 0.005),  
-                "max_keypoints": self.config.get('max_keypoints', 4096),  
-                "remove_borders": self.config.get('remove_borders', 4),
-                "fix_sampling": self.config.get('fix_sampling', False),
-            }
+            # Indoor-optimized SuperPoint configuration
+            max_kpts = self.config.get('max_keypoints', 3500)  # Increased for indoor scenes with less texture
+            
+            # SuperPoint model variants: 'outdoor' (aachen), 'indoor' (inloc), None (default)
+            # Use InLoc as default for better performance
+            model_variant = self.config.get('model_variant', 'inloc')  # InLoc as default
+            
+            if model_variant == 'aachen' or model_variant == 'outdoor':
+                weights = 'outdoor'  # Better for outdoor scenes
+                logger.info(f"Using SuperPoint outdoor model (Aachen) with {max_kpts} keypoints")
+            elif model_variant == 'inloc' or model_variant == 'indoor':
+                weights = 'indoor'   # Better performance overall
+                logger.info(f"Using SuperPoint indoor model (InLoc) with {max_kpts} keypoints")
+            else:
+                weights = 'indoor'  # Default to InLoc for better performance
+                logger.info(f"Using SuperPoint InLoc model (default) with {max_kpts} keypoints")
             
             self.model = SuperPoint(
-                nms_radius=superpoint_conf["nms_radius"],
-                keypoint_threshold=superpoint_conf["keypoint_threshold"],
-                max_keypoints=superpoint_conf["max_keypoints"],
-                remove_borders=superpoint_conf["remove_borders"]
+                nms_radius=3,  # Reduced for denser keypoints in indoor scenes
+                keypoint_threshold=0.003,  # Lower threshold for more keypoints in low-texture areas
+                max_keypoints=max_kpts,
+                remove_borders=4,  # Remove border artifacts
+                weights=weights  # Specify model variant
             ).eval().to(self.device)
+            
+            logger.info("SuperPoint model loaded successfully")
+            
         except ImportError as e:
             raise ImportError(f"LightGlue SuperPoint not available: {e}. Try: pip install lightglue @ git+https://github.com/cvg/LightGlue.git")
+        except Exception as e:
+            logger.error(f"Failed to initialize SuperPoint model: {e}")
+            raise
     
     def extract_features(self, images: List[Dict], batch_size: int = 8) -> Dict[str, Any]:
-        """Extract SuperPoint features from images with multi-scale optimization"""
+        """Extract SuperPoint features from images - simplified implementation"""
         if not images:
             return {}
         
-        # Calculate adaptive batch size with feature type
-        avg_size = np.mean([img['image'].shape[:2] for img in images], axis=0).astype(int)
-        feature_type = self.__class__.__name__.lower().replace('extractor', '')
-        adaptive_batch_size = self._get_adaptive_batch_size(len(images), tuple(avg_size), feature_type)
-        actual_batch_size = min(batch_size, adaptive_batch_size)
-        
-        logger.info(f"Using adaptive batch size: {actual_batch_size} (requested: {batch_size}) for {feature_type}")
+        logger.info(f"Using batch size: {batch_size} for SuperPoint feature extraction")
         
         features = {}
         processing_times = []
         
-        for i in tqdm(range(0, len(images), actual_batch_size), desc="Extracting features"):
+        for i in tqdm(range(0, len(images), batch_size), desc="Extracting features"):
             batch_start = time.time()
-            batch = images[i:i + actual_batch_size]
+            batch = images[i:i + batch_size]
             
-            # Process batch with multi-scale extraction
-            batch_features = self._extract_batch_multiscale(batch)
-            features.update(batch_features)
+            # Process batch - simplified single-scale extraction
+            for img_data in batch:
+                try:
+                    image = img_data['image']
+                    image_path = img_data['path']
+                    
+                    # Preprocess image
+                    image_tensor = self._preprocess_image(image)
+                    
+                    # Extract features
+                    with torch.no_grad():
+                        input_data = {'image': image_tensor}
+                        pred = self.model(input_data)
+                    
+                    # Convert to numpy arrays
+                    keypoints = pred['keypoints'][0].cpu().numpy()
+                    descriptors = pred['descriptors'][0].cpu().numpy()
+                    scores = pred['keypoint_scores'][0].cpu().numpy()
+                    
+                    features[image_path] = {
+                        'keypoints': keypoints,
+                        'descriptors': descriptors,
+                        'scores': scores,
+                        'image_shape': image.shape[:2]
+                    }
+                    
+                    # Clean up intermediate tensors immediately
+                    del image_tensor, pred
+                    
+                except Exception as e:
+                    logger.error(f"Failed to extract features from {img_data['path']}: {e}")
+                    # Create empty features for failed images
+                    features[img_data['path']] = {
+                        'keypoints': np.array([]).reshape(0, 2),
+                        'descriptors': np.array([]).reshape(0, 256),
+                        'scores': np.array([]),
+                        'image_shape': img_data['image'].shape[:2]
+                    }
             
             batch_time = time.time() - batch_start
             processing_times.append(batch_time)
             
             # Memory cleanup after each batch
-            if self.memory_efficient:
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         
         # Log performance statistics
-        avg_time = np.mean(processing_times) if processing_times else 0
-        total_time = sum(processing_times)
-        logger.info(f"Feature extraction completed: {len(features)} images in {total_time:.2f}s ")
-        logger.info(f"Average time per batch: {avg_time:.3f}s, Images per second: {len(images)/total_time:.1f}")
+        if processing_times:
+            avg_time = np.mean(processing_times)
+            total_time = sum(processing_times)
+            logger.info(f"SuperPoint extraction completed: {len(features)} images in {total_time:.2f}s")
+            logger.info(f"Average time per batch: {avg_time:.3f}s, Images per second: {len(images)/total_time:.1f}")
         
         return features
-    
-    def _extract_batch_multiscale(self, batch: List[Dict]) -> Dict[str, Any]:
-        """Extract features from a batch with multi-scale processing"""
-        batch_features = {}
-        
-        for img_data in batch:
-            image = img_data['image']
-            image_path = img_data['path']
-            original_size = image.shape[:2]
-            
-            # Create image pyramid
-            image_pyramid = self._create_image_pyramid(image)
-            
-            # Extract features at each scale
-            scale_features = []
-            for scale_img, scale_factor in zip(image_pyramid, self.scale_factors[:len(image_pyramid)]):
-                # Preprocess image
-                image_tensor = self._preprocess_image(scale_img)
-                
-                # Extract features
-                with torch.no_grad():
-                    input_data = {'image': image_tensor}
-                    pred = self.model(input_data)
-                
-                # Convert to numpy arrays
-                keypoints = pred['keypoints'][0].cpu().numpy()
-                descriptors = pred['descriptors'][0].cpu().numpy()
-                scores = pred['keypoint_scores'][0].cpu().numpy()
-                
-                scale_features.append({
-                    'keypoints': keypoints,
-                    'descriptors': descriptors,
-                    'scores': scores,
-                    'image_shape': scale_img.shape[:2]
-                })
-                
-                # Clean up intermediate tensors
-                del image_tensor, pred
-            
-            # Merge multi-scale features
-            merged_features = self._merge_multi_scale_features(scale_features, original_size)
-            batch_features[image_path] = merged_features
-        
-        return batch_features
 
 
 class ALIKEDExtractor(BaseFeatureExtractor):

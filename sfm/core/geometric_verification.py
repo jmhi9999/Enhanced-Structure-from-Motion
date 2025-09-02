@@ -1,6 +1,6 @@
 """
-Geometric and Semantic verification module
-Supports multiple RANSAC implementations and semantic filtering
+Geometric verification module
+Supports multiple RANSAC implementations
 """
 
 import numpy as np
@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
-from .semantic_groups import are_semantically_compatible
+# Removed semantic groups import
 
 # GPU modules - completely optional to avoid import issues
 try:
@@ -38,7 +38,7 @@ class RANSACMethod(Enum):
 
 class GeometricVerification:
     """
-    Geometric and Semantic verification with multiple RANSAC implementation options
+    Geometric verification with multiple RANSAC implementation options
     """
     
     def __init__(self, 
@@ -53,22 +53,22 @@ class GeometricVerification:
                 self.method = RANSACMethod(method_str)
             except ValueError:
                 self.method = RANSACMethod.OPENCV_MAGSAC
-            self.confidence = config.get('confidence', 0.999)   # Balanced confidence (was 0.9999)
-            self.max_iterations = config.get('max_iterations', 2000)  # Reasonable iterations (was 50000)
-            self.threshold = config.get('threshold', 2.0)   # Reasonable threshold (was 0.5)
-            self.min_matches = config.get('min_matches', 8)   # Minimum viable matches (was 25)
+            self.confidence = config.get('confidence', 0.9999)  # High confidence for indoor precision
+            self.max_iterations = config.get('max_iterations', 10000)  # More iterations for indoor accuracy
+            self.threshold = config.get('threshold', 1.5)   # Lower threshold for indoor scenes
+            self.min_matches = config.get('min_matches', 8)   # Minimum viable matches
         elif config_or_method is None or isinstance(config_or_method, RANSACMethod):
             self.method = config_or_method or RANSACMethod.OPENCV_MAGSAC
-            self.confidence = kwargs.get('confidence', 0.999)   # Balanced confidence (was 0.9999)
-            self.max_iterations = kwargs.get('max_iterations', 2000)  # Reasonable iterations (was 50000)
-            self.threshold = kwargs.get('threshold', 2.0)   # Reasonable threshold (was 0.5)
-            self.min_matches = kwargs.get('min_matches', 8)   # Minimum viable matches (was 25)
+            self.confidence = kwargs.get('confidence', 0.9999)  # High confidence for indoor precision
+            self.max_iterations = kwargs.get('max_iterations', 10000)  # More iterations for indoor accuracy
+            self.threshold = kwargs.get('threshold', 1.5)   # Lower threshold for indoor scenes
+            self.min_matches = kwargs.get('min_matches', 8)   # Minimum viable matches
         else:
             self.method = RANSACMethod.OPENCV_MAGSAC
-            self.confidence = kwargs.get('confidence', 0.999)   # Balanced confidence (was 0.9999)
-            self.max_iterations = kwargs.get('max_iterations', 2000)  # Reasonable iterations (was 50000)
-            self.threshold = kwargs.get('threshold', 2.0)   # Reasonable threshold (was 0.5)
-            self.min_matches = kwargs.get('min_matches', 8)   # Minimum viable matches (was 25)
+            self.confidence = kwargs.get('confidence', 0.9999)  # High confidence for indoor precision
+            self.max_iterations = kwargs.get('max_iterations', 10000)  # More iterations for indoor accuracy
+            self.threshold = kwargs.get('threshold', 1.5)   # Lower threshold for indoor scenes
+            self.min_matches = kwargs.get('min_matches', 8)   # Minimum viable matches
         
         self.device = device or (torch.device('cuda') if GPU_AVAILABLE else torch.device('cpu'))
         self._init_method(**kwargs)
@@ -82,96 +82,7 @@ class GeometricVerification:
         if self.method == RANSACMethod.OPENCV_MAGSAC:
             logger.info("Using OpenCV MAGSAC")
 
-    def filter_by_semantics(self, matches: Dict, features: Dict, semantic_masks: Dict) -> Dict:
-        """
-        Filters matches based on semantic consistency.
-
-        Args:
-            matches (Dict): The raw matches from the matcher.
-            features (Dict): The features dictionary containing keypoints.
-            semantic_masks (Dict): A dictionary mapping image paths to their semantic masks.
-
-        Returns:
-            Dict: A new dictionary containing only the semantically consistent matches.
-        """
-        logger.info("Starting EXACT semantic filtering of matches...")
-        semantically_verified_matches = {}
-        total_matches_before = sum(len(match_data['matches0']) for match_data in matches.values())
-        total_matches_after = 0
-        
-        for pair_key, match_data in tqdm(matches.items(), desc="Exact Semantic Filtering"):
-            # Handle both tuple and string keys
-            if isinstance(pair_key, tuple):
-                img_path1, img_path2 = pair_key
-            else:
-                # Fallback for string keys
-                img_path1_str, img_path2_str = pair_key.split('-')
-                # Find the full path from the features dictionary keys
-                img_path1 = next((p for p in features.keys() if Path(p).name == img_path1_str), None)
-                img_path2 = next((p for p in features.keys() if Path(p).name == img_path2_str), None)
-
-            if not img_path1 or not img_path2:
-                logger.warning(f"Could not find image paths for pair {pair_key}")
-                continue
-
-            mask1 = semantic_masks.get(img_path1)
-            mask2 = semantic_masks.get(img_path2)
-
-            if mask1 is None or mask2 is None:
-                logger.debug(f"Skipping semantic check for pair {pair_key} due to missing masks.")
-                semantically_verified_matches[pair_key] = match_data
-                continue
-
-            kpts1 = features[img_path1]['keypoints']
-            kpts2 = features[img_path2]['keypoints']
-            
-            matches0 = match_data['matches0']
-            
-            good_indices = []
-            for i in range(len(matches0)):
-                idx1 = matches0[i]
-                idx2 = match_data['matches1'][i]
-
-                pt1 = kpts1[idx1]
-                pt2 = kpts2[idx2]
-
-                # Get semantic label at keypoint locations
-                # Ensure coordinates are within mask bounds
-                y1, x1 = int(pt1[1]), int(pt1[0])
-                y2, x2 = int(pt2[1]), int(pt2[0])
-                
-                if 0 <= y1 < mask1.shape[0] and 0 <= x1 < mask1.shape[1] and \
-                   0 <= y2 < mask2.shape[0] and 0 <= x2 < mask2.shape[1]:
-                    
-                    label1 = mask1[y1, x1]
-                    label2 = mask2[y2, x2]
-
-                    # Keep match ONLY if labels are exactly identical (strict filtering)
-                    if int(label1) == int(label2):
-                        good_indices.append(i)
-
-            if len(good_indices) < self.min_matches:
-                logger.debug(f"Pair {pair_key} has too few semantically consistent matches: {len(good_indices)}")
-                continue
-
-            # Create a new match_data dictionary with filtered matches
-            new_match_data = match_data.copy()
-            new_match_data['matches0'] = match_data['matches0'][good_indices]
-            new_match_data['matches1'] = match_data['matches1'][good_indices]
-            if 'mscores0' in match_data:
-                new_match_data['mscores0'] = match_data['mscores0'][good_indices]
-            if 'mscores1' in match_data:
-                new_match_data['mscores1'] = match_data['mscores1'][good_indices]
-            
-            semantically_verified_matches[pair_key] = new_match_data
-            total_matches_after += len(good_indices)
-            logger.debug(f"Pair {pair_key}: {len(good_indices)}/{len(matches0)} matches passed EXACT semantic check.")
-
-        retention_rate = (total_matches_after / total_matches_before * 100) if total_matches_before > 0 else 0
-        logger.info(f"EXACT semantic filtering complete:")
-        logger.info(f"  - Pairs: {len(semantically_verified_matches)}/{len(matches)} ({len(semantically_verified_matches)/len(matches)*100:.1f}%)")
-        logger.info(f"  - Matches: {total_matches_after}/{total_matches_before} ({retention_rate:.1f}% retained)")
-        return semantically_verified_matches
+    # Removed semantic filtering method
 
     # ... (all other methods like find_essential_matrix, verify_matches, etc., remain here)
     def find_essential_matrix(self, 

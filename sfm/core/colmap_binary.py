@@ -53,22 +53,22 @@ def filter_matches_with_magsac(features: Dict[str, Any], matches: Dict[Tuple[str
             if len(matched_kpts1) < 8:  # Need at least 8 points for fundamental matrix
                 continue
             
-            # Run MAGSAC with balanced parameters
+            # Run MAGSAC with indoor-optimized parameters
             F_matrix, inlier_mask = cv2.findFundamentalMat(
                 matched_kpts1.astype(np.float32),
                 matched_kpts2.astype(np.float32),
                 method=cv2.USAC_MAGSAC,
-                ransacReprojThreshold=2.0,  # Reasonable threshold (was 0.8, too strict)
-                confidence=0.999,           # Standard confidence (was 0.9999, too high)
-                maxIters=1000              # Efficient iterations (was 5000, too many)
+                ransacReprojThreshold=1.5,  # Lower threshold for indoor precision
+                confidence=0.9999,          # High confidence for indoor accuracy
+                maxIters=10000              # More iterations for indoor robustness
             )
             
             if F_matrix is None or inlier_mask is None:
                 continue
             
-            # Keep only inlier matches
+            # Keep only inlier matches - stricter for large datasets
             inlier_mask = inlier_mask.ravel().astype(bool)
-            if inlier_mask.sum() < 8:  # Need minimum matches (was 15, too high)
+            if inlier_mask.sum() < 20:  # Higher minimum for 330 image dataset
                 continue
             
             # Update match data with filtered matches
@@ -269,19 +269,29 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -
         "--image_path", str(image_dir),
         "--output_path", str(sparse_path),
         "--Mapper.num_threads", "16",
-        # CPU 최적화 옵션들 (PBA 미지원 버전)
-        "--Mapper.ba_local_max_num_iterations", "20",  # 25->20 (안전한 가속)
-        "--Mapper.ba_global_max_num_iterations", "35",  # 50->35 (안전한 가속)
-        "--Mapper.max_num_models", "1",  # 단일 모델
-        "--Mapper.max_model_overlap", "15",  # 20->15 (적당한 가속)
-        "--Mapper.min_num_matches", "8",   # Reduced from 15 to 8
-        "--Mapper.ba_global_images_ratio", "1.2",  # 메모리 효율성
-        "--Mapper.ba_global_points_ratio", "1.2"  # 메모리 효율성
+        # Large dataset optimized settings
+        "--Mapper.ba_local_max_num_iterations", "15",  # Efficient local BA
+        "--Mapper.ba_global_max_num_iterations", "30",  # Efficient global BA
+        "--Mapper.max_num_models", "1",  # Single model
+        "--Mapper.max_model_overlap", "20",  # Model overlap
+        "--Mapper.min_num_matches", "15",   # Higher threshold for stability
+        "--Mapper.ba_global_images_ratio", "1.5",  # More conservative BA
+        "--Mapper.ba_global_points_ratio", "1.5",  # More conservative BA
+        "--Mapper.ba_local_num_images", "6",  # Smaller local BA windows
+        "--Mapper.ba_local_max_refinements", "2",  # Limit refinement iterations
+        # Indoor-specific triangulation settings
+        "--Mapper.init_min_tri_angle", "2.0",  # Reasonable angle for stability
+        "--Mapper.abs_pose_min_num_inliers", "15",  # Higher inliers for large datasets
+        "--Mapper.min_focal_length_ratio", "0.2",  # Reasonable focal length range
+        # Intrinsics settings for indoor stability
+        "--Mapper.ba_refine_focal_length", "false",  # Keep focal length fixed initially
+        "--Mapper.ba_refine_principal_point", "false",  # Keep principal point fixed
+        "--Mapper.ba_refine_extra_params", "false"  # Keep distortion fixed
     ]
     
     try:
         logger.info(f"Running command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)  # 30min timeout for large datasets
         
         logger.info(f"COLMAP mapper return code: {result.returncode}")
         logger.info(f"COLMAP stdout: {result.stdout}")
