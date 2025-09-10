@@ -210,10 +210,22 @@ class GPUBruteForceMatcher:
             self.memory_pool = None
             self.use_memory_pool = False
         
-        # Matching parameters
-        self.batch_size = self.config.get('batch_size', 32)
+        # Matching parameters with dynamic adjustment
+        default_batch_size = self.config.get('batch_size', 32)
+        
+        # Reduce batch size for large datasets to avoid GPU memory issues
+        if 'max_features_per_image' in self.config:
+            max_features = self.config['max_features_per_image']
+            if max_features > 2000:
+                default_batch_size = min(default_batch_size, 8)  # Large features -> smaller batch
+            elif max_features > 1000:
+                default_batch_size = min(default_batch_size, 16)  # Medium features -> medium batch
+        
+        self.batch_size = default_batch_size
         self.confidence_threshold = self.config.get('confidence_threshold', 0.2)
         self.min_matches = self.config.get('min_matches', 8)
+        
+        logger.info(f"Using batch_size={self.batch_size} for GPU processing")
         
         # Performance stats
         self.timing_stats = {
@@ -305,16 +317,16 @@ class GPUBruteForceMatcher:
             pairs = [pairs[idx] for idx in pair_indices]
         
         # Process pairs in batches for memory efficiency
-        for batch_start in range(0, len(pairs), self.batch_size):
-            batch_end = min(batch_start + self.batch_size, len(pairs))
-            batch_pairs = pairs[batch_start:batch_end]
-            
-            batch_matches = self._match_batch_gpu(batch_pairs)
-            matches.update(batch_matches)
-            
-            pairs_processed += len(batch_pairs)
-            if pairs_processed % (self.batch_size * 10) == 0:
-                logger.info(f"Processed {pairs_processed}/{len(pairs)} pairs...")
+        with tqdm(total=len(pairs), desc="Matching pairs", unit="pairs") as pbar:
+            for batch_start in range(0, len(pairs), self.batch_size):
+                batch_end = min(batch_start + self.batch_size, len(pairs))
+                batch_pairs = pairs[batch_start:batch_end]
+                
+                batch_matches = self._match_batch_gpu(batch_pairs)
+                matches.update(batch_matches)
+                
+                pairs_processed += len(batch_pairs)
+                pbar.update(len(batch_pairs))
         
         total_time = time.time() - start_time
         self.timing_stats['matching'].append(total_time)
@@ -328,10 +340,22 @@ class GPUBruteForceMatcher:
     
     def _match_batch_gpu(self, batch_pairs: List[Tuple[int, int]]) -> Dict[Tuple[str, str], Any]:
         """
-        Match a batch of image pairs using GPU tensors
+        Match a batch of image pairs using GPU tensors with memory management
         """
         import traceback
         batch_matches = {}
+        
+        # Check GPU memory before processing
+        if torch.cuda.is_available():
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory
+            gpu_allocated = torch.cuda.memory_allocated()
+            gpu_free = gpu_memory - gpu_allocated
+            
+            if gpu_free < 1024 * 1024 * 1024:  # Less than 1GB free
+                logger.warning(f"Low GPU memory: {gpu_free / (1024**3):.1f}GB free, clearing cache...")
+                torch.cuda.empty_cache()
+                
+        # Progress tracking handled by parent methods with tqdm
         # Optional GPU profiling
         enable_profiling = getattr(self, 'enable_profiling', False)
         if enable_profiling and torch.cuda.is_available():
@@ -454,12 +478,14 @@ class GPUBruteForceMatcher:
         matches = {}
         
         # Process in batches
-        for batch_start in range(0, len(idx_pairs), self.batch_size):
-            batch_end = min(batch_start + self.batch_size, len(idx_pairs))
-            batch_pairs = idx_pairs[batch_start:batch_end]
-            
-            batch_matches = self._match_batch_gpu(batch_pairs)
-            matches.update(batch_matches)
+        with tqdm(total=len(idx_pairs), desc="Matching pairs", unit="pairs") as pbar:
+            for batch_start in range(0, len(idx_pairs), self.batch_size):
+                batch_end = min(batch_start + self.batch_size, len(idx_pairs))
+                batch_pairs = idx_pairs[batch_start:batch_end]
+                
+                batch_matches = self._match_batch_gpu(batch_pairs)
+                matches.update(batch_matches)
+                pbar.update(len(batch_pairs))
         
         total_time = time.time() - start_time
         self.timing_stats['matching'].append(total_time)

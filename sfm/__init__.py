@@ -40,9 +40,6 @@ def __getattr__(name):
     elif name == "RANSACMethod":
         from .core.geometric_verification import RANSACMethod
         return RANSACMethod
-    elif name == "GPUBundleAdjustment":
-        from .core.gpu_bundle_adjustment import GPUBundleAdjustment
-        return GPUBundleAdjustment
     elif name == "GPUVocabularyTree":
         from .core.gpu_vocabulary_tree import GPUVocabularyTree
         return GPUVocabularyTree
@@ -80,7 +77,6 @@ __all__ = [
     "EnhancedLightGlueMatcher", 
     "GeometricVerification",
     "RANSACMethod",
-    "GPUBundleAdjustment",
     "GPUVocabularyTree",
     "ScaleRecovery",
     

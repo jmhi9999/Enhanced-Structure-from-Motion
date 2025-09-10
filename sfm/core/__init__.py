@@ -10,12 +10,6 @@ from .scale_recovery import ScaleRecovery
 
 # GPU modules - optional imports
 
-try:
-    from .gpu_bundle_adjustment import GPUBundleAdjustment
-    GPU_BA_AVAILABLE = True
-except ImportError:
-    GPU_BA_AVAILABLE = False
-    GPUBundleAdjustment = None
 
 try:
     from .gpu_vocabulary_tree import GPUVocabularyTree
@@ -40,12 +34,6 @@ def verify_geometry(matches, config=None):
     verifier = GeometricVerification(config or {})
     return verifier.verify(matches)
 
-def bundle_adjustment(points3d, cameras, config=None):
-    """Perform bundle adjustment"""
-    if not GPU_BA_AVAILABLE:
-        raise ImportError("GPU Bundle Adjustment not available. Install with: pip install -e .[gpu]")
-    ba = GPUBundleAdjustment(config or {})
-    return ba.optimize(points3d, cameras)
 
 
 
@@ -65,14 +53,11 @@ __all__ = [
     "extract_features",
     "match_features", 
     "verify_geometry",
-    "bundle_adjustment",
     "recover_scale"
 ]
 
 # Add optional modules if available
 
 # Add GPU classes if available
-if GPU_BA_AVAILABLE:
-    __all__.append("GPUBundleAdjustment")
 if GPU_VOCAB_AVAILABLE:
     __all__.append("GPUVocabularyTree") 

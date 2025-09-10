@@ -9,8 +9,8 @@ import json
 import pickle
 
 
-def save_colmap_format(output_dir: str, cameras: Dict, images: Dict, 
-                      points3d: Dict):
+def save_colmap_format(cameras: Dict, images: Dict, points3d: Dict, 
+                      output_dir: str):
     """Save SfM results in COLMAP format"""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
