@@ -18,7 +18,6 @@ import numpy as np
 from tqdm import tqdm
 from PIL import Image
 
-# Import our enhanced SfM components
 from sfm.core.feature_extractor import FeatureExtractorFactory
 from sfm.core.feature_matcher import EnhancedLightGlueMatcher
 from sfm.core.geometric_verification import GeometricVerification, RANSACMethod
@@ -613,7 +612,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
                         f"Copied {len(list(gs_images_dir.iterdir()))} images to 3DGS directory"
                     )
 
-                logger.info(f"✅ 3DGS files ready at: {gs_sparse_dir}")
+                logger.info(f" 3DGS files ready at: {gs_sparse_dir}")
                 logger.info(f"   - Use with: python train.py -s {gs_input_path}")
 
         except Exception as e:
@@ -623,38 +622,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         logger.info(
             f"3DGS preparation completed in {stage_times['3dgs_preparation']:.2f}s"
         )
-
-    # Stage 9: Scale recovery (for 3DGS consistency)
-    if kwargs.get("scale_recovery", False):
-        logger.info("Stage 9: Scale recovery...")
-        stage_start = time.time()
-
-        # Apply global scale recovery for consistent scene scale
-        from sfm.core.scale_recovery import ScaleRecovery
-
-        scale_recovery = ScaleRecovery(device=device)
-
-        scaled_points, scaled_cameras = scale_recovery.recover_scale(
-            sparse_points, cameras, images
-        )
-
-        # Update with scaled results
-        sparse_points = scaled_points
-        cameras = scaled_cameras
-
-        stage_times["scale_recovery"] = time.time() - stage_start
-        logger.info(f"Scale recovery completed in {stage_times['scale_recovery']:.2f}s")
-
-        # Clean up scale recovery memory
-        if "scale_recovery" in locals():
-            try:
-                if hasattr(scale_recovery, "clear_memory"):
-                    scale_recovery.clear_memory()
-                del scale_recovery
-            except Exception as e:
-                logger.warning(f"Error cleaning up scale recovery: {e}")
-
-        cleanup_gpu_memory(device, "scale recovery")
 
     # Stage 10: Save results in COLMAP format (for 3DGS)
     logger.info("Stage 10: Saving results...")
