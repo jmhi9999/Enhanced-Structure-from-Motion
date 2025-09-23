@@ -108,12 +108,6 @@ def parse_args():
     parser.add_argument(
         "--high_quality", action="store_true", help="Enable high-quality mode for 3DGS"
     )
-    parser.add_argument(
-        "--scale_recovery",
-        action="store_true",
-        default=True,
-        help="Enable scale recovery for consistent scene scale",
-    )
 
     # 3DGS Integration
     parser.add_argument(
@@ -200,7 +194,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             "max_pairs_per_image": args.max_pairs_per_image,
             "max_total_pairs": args.max_total_pairs,
             "copy_to_3dgs_dir": args.copy_to_3dgs_dir,
-            "scale_recovery": args.scale_recovery,
             "high_quality": args.high_quality,
             "device": args.device,
             "num_workers": args.num_workers,

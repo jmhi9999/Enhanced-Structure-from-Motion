@@ -6,7 +6,6 @@ Core SfM components
 from .feature_extractor import FeatureExtractor
 from .feature_matcher import FeatureMatcher
 from .geometric_verification import GeometricVerification
-from .scale_recovery import ScaleRecovery
 
 # GPU modules - optional imports
 
