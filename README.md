@@ -16,11 +16,7 @@ pip install cupy-cuda12x faiss-gpu
 
 ### Basic SfM Reconstruction
 ```bash
-python sfm_pipeline.py \
-  --input_dir path/to/images \
-  --output_dir path/to/output \
-  --feature_extractor superpoint \
-  --use_vocab_tree
+python sfm_pipeline.py  --input_dir path/to/images  --output_dir path/to/output  --feature_extractor aliked --use_vocab_tree
 ```
 
 ## Pipeline Architecture
@@ -28,7 +24,7 @@ python sfm_pipeline.py \
 ```
 Enhanced SfM Pipeline
 ├── Image Preprocessing → sfm/utils/image_utils.py
-├── Feature Extraction → sfm/core/feature_extractor.py (SuperPoint/ALIKED/DISK)
+├── Feature Extraction → sfm/core/feature_extractor.py (SuperPoint/ALIKED)
 ├── Pair Selection → sfm/core/gpu_vocabulary_tree.py (FAISS-powered O(n log n))
 ├── Feature Matching → sfm/core/feature_matcher.py (LightGlue + GPU brute force fallback)
 ├── Geometric Verification → sfm/core/geometric_verification.py (cv2.USAC_MAGSAC)
