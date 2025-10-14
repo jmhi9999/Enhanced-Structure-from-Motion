@@ -3,176 +3,49 @@ I/O utilities for saving SfM results in COLMAP format
 """
 
 import numpy as np
-from typing import Dict, List, Any, Tuple
+from typing import Dict, Any, Optional
 from pathlib import Path
 import json
-import pickle
+import shutil
+import struct
 
 
-def save_colmap_format(cameras: Dict, images: Dict, points3d: Dict, 
-                      output_dir: str):
-    """Save SfM results in COLMAP format"""
+def save_colmap_format(
+    cameras: Dict,
+    images: Dict,
+    points3d: Dict,
+    output_dir: str,
+    source_sparse_dir: Optional[Path] = None,
+) -> None:
+    """Prepare COLMAP-format outputs for downstream tools (e.g., 3DGS).
+
+    We copy the original COLMAP binary/text files when available to guarantee
+    compatibility and still emit a JSON summary for quick inspection.
+    """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Save cameras.bin
-    save_cameras_bin(output_path / "cameras.bin", cameras)
-    
-    # Save images.bin
-    save_images_bin(output_path / "images.bin", images)
-    
-    # Save points3D.bin
-    save_points3d_bin(output_path / "points3D.bin", points3d)
-    
-    
-    # Save reconstruction info
-    save_reconstruction_info(output_path / "reconstruction_info.json", 
-                           cameras, images, points3d)
-    
-    print(f"SfM results saved to {output_path}")
 
+    source_sparse_path = Path(source_sparse_dir) if source_sparse_dir else None
+    if source_sparse_path and source_sparse_path.exists():
+        for filename in [
+            "cameras.bin",
+            "images.bin",
+            "points3D.bin",
+            "cameras.txt",
+            "images.txt",
+            "points3D.txt",
+            "project.ini",
+        ]:
+            src_file = source_sparse_path / filename
+            if src_file.exists():
+                shutil.copy2(src_file, output_path / filename)
 
-def save_cameras_bin(filepath: Path, cameras: Dict):
-    """Save cameras in COLMAP binary format"""
-    with open(filepath, 'wb') as f:
-        # Write number of cameras
-        num_cameras = len(cameras)
-        f.write(num_cameras.to_bytes(8, byteorder='little'))
-        
-        for camera_id, camera in cameras.items():
-            # Write camera ID (convert to int if string)
-            camera_id_int = int(camera_id) if isinstance(camera_id, str) else int(camera_id)
-            f.write(camera_id_int.to_bytes(4, byteorder='little'))
-            
-            # Write model name
-            model_name = camera['model'].encode('utf-8')
-            f.write(len(model_name).to_bytes(8, byteorder='little'))
-            f.write(model_name)
-            
-            # Write width and height
-            f.write(camera['width'].to_bytes(8, byteorder='little'))
-            f.write(camera['height'].to_bytes(8, byteorder='little'))
-            
-            # Write parameters
-            params = camera['params']
-            f.write(len(params).to_bytes(8, byteorder='little'))
-            for param in params:
-                f.write(struct.pack('d', param))
-
-
-def save_images_bin(filepath: Path, images: Dict):
-    """Save images in COLMAP binary format"""
-    with open(filepath, 'wb') as f:
-        # Write number of images
-        num_images = len(images)
-        f.write(num_images.to_bytes(8, byteorder='little'))
-        
-        for image_key, image in images.items():
-            # Handle both path-based and ID-based keys
-            if isinstance(image_key, (int, np.integer)):
-                # If key is numeric ID, use it directly and get name from image data
-                image_id = int(image_key)
-                image_path = image.get('name', f'image_{image_key}')
-            else:
-                # If key is a path, use hash as ID and extract name
-                image_path = str(image_key)
-                image_id = hash(image_path) % (2**31)  # 32-bit positive integer
-            
-            f.write(image_id.to_bytes(4, byteorder='little'))
-            
-            # Write camera ID (convert to int if string, default to 1 if missing)
-            camera_id = image.get('camera_id', 1)
-            camera_id_int = int(camera_id) if isinstance(camera_id, str) else int(camera_id)
-            f.write(camera_id_int.to_bytes(4, byteorder='little'))
-            
-            # Write image name 
-            if 'name' in image:
-                image_name = image['name'].encode('utf-8')
-            else:
-                # Fallback: use the basename of the image_path
-                image_name = Path(image_path).name.encode('utf-8')
-            f.write(len(image_name).to_bytes(8, byteorder='little'))
-            f.write(image_name)
-            
-            # Write quaternion (rotation) - provide default if missing
-            qvec = image.get('qvec', [1.0, 0.0, 0.0, 0.0])  # Default identity quaternion
-            for q in qvec:
-                f.write(struct.pack('d', q))
-            
-            # Write translation vector - provide default if missing
-            tvec = image.get('tvec', [0.0, 0.0, 0.0])  # Default zero translation
-            for t in tvec:
-                f.write(struct.pack('d', t))
-            
-            # Write number of points - provide defaults if missing
-            xys = image.get('xys', [])
-            point3d_ids = image.get('point3D_ids', [])
-            num_points = len(xys)
-            f.write(num_points.to_bytes(8, byteorder='little'))
-            
-            # Write 2D points
-            for xy in xys:
-                f.write(struct.pack('dd', xy[0], xy[1]))
-            
-            # Write point3D IDs
-            for point3d_id in point3d_ids:
-                # Convert ID to int if string, handle -1 (invalid points)
-                point3d_id_int = int(point3d_id) if isinstance(point3d_id, str) else int(point3d_id)
-                # COLMAP uses -1 for invalid points, but we need to handle the unsigned conversion
-                if point3d_id_int < 0:
-                    point3d_id_int = 4294967295  # 0xFFFFFFFF (max uint32 value represents -1)
-                f.write(point3d_id_int.to_bytes(4, byteorder='little', signed=False))
-
-
-def save_points3d_bin(filepath: Path, points3d: Dict):
-    """Save 3D points in COLMAP binary format"""
-    with open(filepath, 'wb') as f:
-        # Write number of points
-        num_points = len(points3d)
-        f.write(num_points.to_bytes(8, byteorder='little'))
-        
-        for point_id, point in points3d.items():
-            # Write point ID (convert to int if string, skip if invalid)
-            try:
-                if isinstance(point_id, str):
-                    # Skip non-numeric string keys (like "points", "cameras", etc.)
-                    if not point_id.isdigit():
-                        continue
-                    point_id_int = int(point_id)
-                else:
-                    point_id_int = int(point_id)
-            except (ValueError, TypeError):
-                # Skip invalid point IDs
-                continue
-            
-            f.write(point_id_int.to_bytes(8, byteorder='little'))
-            
-            # Write XYZ coordinates
-            xyz = point['xyz']
-            for coord in xyz:
-                f.write(struct.pack('d', coord))
-            
-            # Write RGB color
-            rgb = point['rgb']
-            for color in rgb:
-                f.write(int(color).to_bytes(1, byteorder='little'))
-            
-            # Write error
-            f.write(struct.pack('d', point['error']))
-            
-            # Write track length
-            track = point['track']
-            f.write(len(track).to_bytes(8, byteorder='little'))
-            
-            # Write track elements
-            for image_id, point2d_id in track:
-                # Convert IDs to int if string
-                image_id_int = int(image_id) if isinstance(image_id, str) else int(image_id)
-                point2d_id_int = int(point2d_id) if isinstance(point2d_id, str) else int(point2d_id)
-                f.write(image_id_int.to_bytes(4, byteorder='little'))
-                f.write(point2d_id_int.to_bytes(4, byteorder='little'))
-
-
+    save_reconstruction_info(
+        output_path / "reconstruction_info.json",
+        cameras,
+        images,
+        points3d,
+    )
 
 
 def save_reconstruction_info(filepath: Path, cameras: Dict, images: Dict, points3d: Dict):

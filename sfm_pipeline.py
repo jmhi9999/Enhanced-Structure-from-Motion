@@ -48,7 +48,7 @@ def parse_args():
     parser.add_argument(
         "--feature_extractor",
         type=str,
-        default="superpoint",
+        default="aliked",
         choices=["superpoint", "aliked", "disk"],
         help="Feature extractor to use",
     )
@@ -69,7 +69,7 @@ def parse_args():
     parser.add_argument(
         "--use_brute_force",
         action="store_true",
-        default=True,
+        default=False,
         help="Use GPU brute force matching (default and recommended)",
     )
     parser.add_argument(
@@ -115,6 +115,26 @@ def parse_args():
         type=str,
         default=None,
         help="Directory to copy COLMAP sparse files for 3D Gaussian Splatting",
+    )
+
+    # Context-Aware Bundle Adjustment
+    parser.add_argument(
+        "--use_context_ba",
+        action="store_true",
+        help="Use Context-Aware Bundle Adjustment instead of COLMAP BA",
+    )
+    parser.add_argument(
+        "--confidence_mode",
+        type=str,
+        default="rule_based",
+        choices=["rule_based", "hybrid"],
+        help="Confidence computation mode (rule_based or hybrid with MLP)",
+    )
+    parser.add_argument(
+        "--context_ba_checkpoint",
+        type=str,
+        default=None,
+        help="Path to hybrid MLP checkpoint (only for --confidence_mode hybrid)",
     )
 
     return parser.parse_args()
@@ -198,6 +218,9 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             "device": args.device,
             "num_workers": args.num_workers,
             "batch_size": args.batch_size,
+            "use_context_ba": args.use_context_ba,
+            "confidence_mode": args.confidence_mode,
+            "context_ba_checkpoint": args.context_ba_checkpoint,
         }
     else:
         # Direct function call mode
@@ -535,23 +558,56 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
 
         cleanup_gpu_memory(device, "feature matching")
 
-    # Stage 5: COLMAP-based SfM reconstruction using binary (avoid pycolmap CUDA issues)
-    logger.info("Stage 5: COLMAP-based SfM reconstruction using binary...")
+    # Stage 5: SfM reconstruction (COLMAP or Context-Aware BA)
+    logger.info("Stage 5: SfM reconstruction...")
     stage_start = time.time()
-
-    from sfm.core.colmap_binary import colmap_binary_reconstruction
 
     # Extract image directory from first image path
     first_image_path = Path(next(iter(features.keys())))
     image_dir = first_image_path.parent
 
-    sparse_points, cameras, images = colmap_binary_reconstruction(
-        features=features, matches=matches, output_path=output_path, image_dir=image_dir
-    )
+    # Choose reconstruction method
+    if kwargs.get("use_context_ba", False):
+        logger.info("Using Context-Aware Bundle Adjustment...")
+
+        from sfm.core.context_ba import ContextAwareBundleAdjustment, ContextBAConfig
+        from sfm.core.context_ba.config import HybridMLPConfig
+
+        # Configure context BA
+        ba_config = ContextBAConfig(
+            confidence_mode=kwargs.get("confidence_mode", "rule_based"),
+            log_level="INFO",
+        )
+
+        # Add hybrid MLP checkpoint if provided
+        if kwargs.get("context_ba_checkpoint"):
+            ba_config.hybrid_mlp = HybridMLPConfig(
+                checkpoint_path=Path(kwargs["context_ba_checkpoint"])
+            )
+
+        # Initialize and run context-aware BA
+        context_ba = ContextAwareBundleAdjustment(ba_config)
+
+        cameras, images, sparse_points = context_ba.optimize(
+            features=features,
+            matches=matches,
+            image_dir=image_dir,
+            database_path=output_path,  # Pass output_path, not database file
+        )
+
+        logger.info("Context-Aware BA completed")
+    else:
+        logger.info("Using COLMAP binary reconstruction...")
+
+        from sfm.core.colmap_binary import colmap_binary_reconstruction
+
+        sparse_points, cameras, images = colmap_binary_reconstruction(
+            features=features, matches=matches, output_path=output_path, image_dir=image_dir
+        )
 
     stage_times["sfm_reconstruction"] = time.time() - stage_start
     logger.info(
-        f"COLMAP SfM reconstruction completed in {stage_times['sfm_reconstruction']:.2f}s"
+        f"SfM reconstruction completed in {stage_times['sfm_reconstruction']:.2f}s"
     )
 
     # Clean up reconstruction memory
@@ -584,7 +640,15 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
 
             # Copy all COLMAP files (cameras.bin, images.bin, points3D.bin) if we have a source
             if "source_sparse_dir" in locals():
-                for filename in ["cameras.bin", "images.bin", "points3D.bin"]:
+                for filename in [
+                    "cameras.bin",
+                    "images.bin",
+                    "points3D.bin",
+                    "cameras.txt",
+                    "images.txt",
+                    "points3D.txt",
+                    "project.ini",
+                ]:
                     src_file = source_sparse_dir / filename
                     if src_file.exists():
                         shutil.copy2(src_file, gs_sparse_dir / filename)
@@ -629,6 +693,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         images=images,
         points3d=sparse_points,
         output_dir=str(colmap_dir),
+        source_sparse_dir=output_path / "sparse" / "0",
     )
 
     stage_times["saving"] = time.time() - stage_start

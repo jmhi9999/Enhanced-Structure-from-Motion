@@ -657,7 +657,9 @@ def read_points3d_binary(path_to_model_file: Path) -> Dict[int, Dict]:
                         'xyz': xyz,
                         'rgb': rgb,
                         'error': error,
-                        'track': list(zip(image_ids, point2D_idxs))
+                        'image_ids': image_ids,  # For Context-Aware BA
+                        'point2D_idxs': point2D_idxs,  # For Context-Aware BA
+                        'track': list(zip(image_ids, point2D_idxs))  # For backward compatibility
                     }
                     
                 except (struct.error, ValueError) as e:
@@ -956,6 +958,8 @@ def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[s
             # Ensure camera_id is preserved from COLMAP results
             if 'camera_id' not in img_data_copy and 'camera_id' in img_data:
                 img_data_copy['camera_id'] = img_data['camera_id']
+            # Preserve original COLMAP image ID for downstream modules (e.g., context BA)
+            img_data_copy['colmap_image_id'] = image_id
             
             images_by_path[key] = img_data_copy
             
