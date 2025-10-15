@@ -58,6 +58,26 @@ class SceneGraphConfig:
 
 
 @dataclass
+class PGOConfig:
+    """Configuration for Pose Graph Optimization (PGO) initialization"""
+
+    # Enable PGO initialization (faster convergence for sequential video)
+    enabled: bool = False
+
+    # Maximum rotation averaging iterations
+    max_rotation_iterations: int = 10
+
+    # Convergence threshold for rotation averaging
+    rotation_convergence: float = 1e-4
+
+    # Minimum number of inliers to consider a relative pose valid
+    min_inliers: int = 30
+
+    # Use case: "auto", "sequential_video", "unordered"
+    use_case: str = "auto"  # auto detects based on image names
+
+
+@dataclass
 class OptimizerConfig:
     """Configuration for bundle adjustment optimizer"""
 
@@ -69,13 +89,24 @@ class OptimizerConfig:
 
     # Convergence tolerance
     ftol: float = 1e-6
-    xtol: float = 1e-6
+    xtol: float = 1e-8  # Tighter tolerance for parameters
+    gtol: float = 1e-10  # Gradient tolerance (for scipy)
 
     # Loss function: "linear", "soft_l1", "huber", "cauchy", "arctan"
     loss: str = "soft_l1"
 
     # Verbose output
     verbose: int = 2
+
+    # Scipy-specific optimizations (P3)
+    # Jacobian scaling method: "jac" or None
+    x_scale: str = "jac"  # Scale variables by Jacobian columns
+
+    # Trust region method: "trf" (Trust Region Reflective, best for BA)
+    tr_method: str = "trf"
+
+    # Max function evaluations (None = unlimited)
+    max_nfev: Optional[int] = None
 
 
 @dataclass
@@ -108,6 +139,7 @@ class ContextBAConfig:
     weights: ConfidenceWeights = field(default_factory=ConfidenceWeights)
     scene_graph: SceneGraphConfig = field(default_factory=SceneGraphConfig)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    pgo: PGOConfig = field(default_factory=PGOConfig)
     hybrid_mlp: Optional[HybridMLPConfig] = None
 
     # Minimum confidence threshold (cameras/points below this are excluded)
@@ -137,6 +169,7 @@ class ContextBAConfig:
         weights = ConfidenceWeights(**config_dict.pop("weights", {}))
         scene_graph = SceneGraphConfig(**config_dict.pop("scene_graph", {}))
         optimizer = OptimizerConfig(**config_dict.pop("optimizer", {}))
+        pgo = PGOConfig(**config_dict.pop("pgo", {}))
 
         hybrid_mlp = None
         if "hybrid_mlp" in config_dict:
@@ -146,6 +179,7 @@ class ContextBAConfig:
             weights=weights,
             scene_graph=scene_graph,
             optimizer=optimizer,
+            pgo=pgo,
             hybrid_mlp=hybrid_mlp,
             **config_dict
         )
@@ -157,6 +191,7 @@ class ContextBAConfig:
             "weights": self.weights.__dict__,
             "scene_graph": self.scene_graph.__dict__,
             "optimizer": self.optimizer.__dict__,
+            "pgo": self.pgo.__dict__,
             "hybrid_mlp": self.hybrid_mlp.__dict__ if self.hybrid_mlp else None,
             "min_confidence_threshold": self.min_confidence_threshold,
             "enable_confidence_weighting": self.enable_confidence_weighting,

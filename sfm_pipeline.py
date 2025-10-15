@@ -137,6 +137,25 @@ def parse_args():
         help="Path to hybrid MLP checkpoint (only for --confidence_mode hybrid)",
     )
 
+    # Loop Closure Detection
+    parser.add_argument(
+        "--detect_loop_closures",
+        action="store_true",
+        help="Detect and add loop closures to improve reconstruction quality",
+    )
+    parser.add_argument(
+        "--loop_similarity_threshold",
+        type=float,
+        default=0.70,
+        help="Cosine similarity threshold for loop detection (default: 0.70)",
+    )
+    parser.add_argument(
+        "--loop_min_temporal_gap",
+        type=int,
+        default=30,
+        help="Minimum temporal gap for loop closure detection (default: 30)",
+    )
+
     return parser.parse_args()
 
 
@@ -221,6 +240,9 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             "use_context_ba": args.use_context_ba,
             "confidence_mode": args.confidence_mode,
             "context_ba_checkpoint": args.context_ba_checkpoint,
+            "detect_loop_closures": args.detect_loop_closures,
+            "loop_similarity_threshold": args.loop_similarity_threshold,
+            "loop_min_temporal_gap": args.loop_min_temporal_gap,
         }
     else:
         # Direct function call mode
@@ -557,6 +579,71 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             del formatted_features
 
         cleanup_gpu_memory(device, "feature matching")
+
+    # Stage 4.5: Loop Closure Detection (optional)
+    if kwargs.get("detect_loop_closures", False):
+        logger.info("Stage 4.5: Loop Closure Detection...")
+        stage_start = time.time()
+
+        try:
+            from sfm.core.loop_closure_detector import detect_and_add_loop_closures
+
+            # Configure loop detection
+            loop_config = {
+                'similarity_threshold': kwargs.get('loop_similarity_threshold', 0.70),
+                'min_temporal_gap': kwargs.get('loop_min_temporal_gap', 30),
+                'min_matches_for_verification': 15,
+                'max_loops_to_verify': 100
+            }
+
+            # Detect and add loop closures
+            num_matches_before = len(matches)
+
+            # Need to recreate matcher for loop verification
+            feature_type = kwargs.get("feature_extractor", "superpoint")
+            matcher_config = {
+                "use_brute_force": False,  # Only match specific pairs
+                "use_vocabulary_tree": False,
+            }
+
+            # Create a lightweight matcher for verification
+            loop_matcher = EnhancedLightGlueMatcher(
+                device=device, feature_type=feature_type, config=matcher_config
+            )
+
+            matches = detect_and_add_loop_closures(
+                features=features,
+                matches=matches,
+                matcher=loop_matcher,
+                config=loop_config
+            )
+
+            num_loops_added = len(matches) - num_matches_before
+            logger.info(f"Added {num_loops_added} loop closure edges")
+            logger.info(f"Total matches: {len(matches)} pairs")
+
+            # Save updated matches
+            save_matches(matches, matches_file)
+            logger.info(f"Updated matches saved to {matches_file}")
+
+            # Clean up loop matcher
+            if hasattr(loop_matcher, "clear_memory"):
+                loop_matcher.clear_memory()
+            del loop_matcher
+
+            stage_times["loop_closure_detection"] = time.time() - stage_start
+            logger.info(
+                f"Loop closure detection completed in {stage_times['loop_closure_detection']:.2f}s"
+            )
+
+        except Exception as e:
+            logger.warning(f"Loop closure detection failed: {e}")
+            logger.warning("Continuing with existing matches")
+            stage_times["loop_closure_detection"] = 0.0
+
+        cleanup_gpu_memory(device, "loop closure detection")
+    else:
+        logger.info("Loop closure detection disabled (use --detect_loop_closures to enable)")
 
     # Stage 5: SfM reconstruction (COLMAP or Context-Aware BA)
     logger.info("Stage 5: SfM reconstruction...")
