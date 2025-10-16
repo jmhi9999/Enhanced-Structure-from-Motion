@@ -30,7 +30,9 @@ Traditional SfM pipelines rely on sparse keypoint extraction and descriptor matc
      ↓
 [Attention-guided Patch Sampling]
      ↓
-[Dense Matching via Cosine Similarity or LoFTR]
+[CLS-based Top-K Retrieval (FAISS)]
+     ↓
+[LoFTR Matching + MAGSAC Verification]
      ↓
 [Scene Graph Construction (Weighted by CLS Similarity)]
      ↓
@@ -75,34 +77,54 @@ matches = match_dino_patches(feat_i, feat_j, cos_thresh=0.8, topk_i=800, topk_j=
 - Mutual nearest filtering ensures geometric consistency.
 - Attention-weighted sampling keeps high-saliency tokens only.
 
-### 2b. Local Feature Matching (Hybrid Options)
+## 2c. Image Retrieval and Pair Selection (CLS-based Top-K)
 
-We do **not** rely on DINOv2 patches alone. For precise geometry and sub‑pixel triangulation, we add **local features + learned matchers** and use DINO only as **global/priors**.
+Since LoFTR is detector-free, we replace the traditional **vocabulary tree** approach with a **DINO CLS token–based retrieval pipeline**. Each image’s CLS embedding is used as a compact global descriptor for Top‑K candidate selection.
 
-**Recommended options**
+**Pipeline Overview**
 
-- **LoFTR (default)** — robust, detector-free, high-accuracy under large viewpoint or low-texture conditions.
-- **SuperPoint / ALIKED + LightGlue (fallback)** — fast keypoint-based baseline for light workloads.
-- **MASt3R / DUSt3R (3D-aware pairs)** — extreme-baseline fallback, retrieval-pruned.
-
-**Verification**
-
-- All candidate matches are **verified by MAGSAC++**; we keep pairs with ≥ _min_inliers_ (e.g., 15) and a minimum triangulation angle (e.g., 2.5°).
-
-**Main matcher (LoFTR)**
-
-```python
-loftr_out = loftr_match(image_i_gray, image_j_gray)  # {keypoints0, keypoints1, confidence}
-inl = magsac_verify(loftr_out["keypoints0"], loftr_out["keypoints1"], K_i, K_j)
+```text
+[Images]
+  ↓
+[DINOv2 CLS Embeddings]
+  ↓
+[FAISS Index + Reciprocal Filtering]
+  ↓
+[Top-K1 Candidates (e.g., 60)]
+  ↓
+[Re-ranking: DINO Patch / LoFTR quick-check]
+  ↓
+[Final Top-K (e.g., 20) for Full LoFTR Matching]
 ```
 
-**When do we use which?**
+**Steps**
 
-- Start with **LoFTR** for all retrieval-pruned neighbors.
-- If runtime constraints require faster fallback → use **SuperPoint/ALIKED + LightGlue**.
-- If LoFTR inliers < 8 or tri-angle < 1° and pair is loop-critical → retry with **MASt3R**.
+1. **CLS Embedding Extraction**
 
-This **hybrid schedule** balances speed and robustness while DINOv2 stays as a **retrieval + weighting** source.
+   - Extract L2-normalized CLS embeddings from DINOv2 for each image.
+   - (Optional) Apply PCA to 256D + whitening for speed/memory efficiency.
+
+2. **Initial Retrieval**
+
+   - Build a FAISS index (e.g., `IndexFlatIP` or `IVF-PQ`).
+   - Query each CLS vector to get Top‑K1=60 candidates.
+   - Apply reciprocal filtering and temporal diversity constraints to reduce redundancy.
+   - Final Top‑K ≈ 20.
+
+3. **Re-ranking (Optional)**
+
+   - **A)** Patch‑level mutual NN check (Top‑400 patches, avg cosine of top‑50 mutuals).
+   - **B)** Low‑res LoFTR (e.g., 448 px) + quick MAGSAC verification for inlier count.
+
+4. **Full Matching**
+   - Run LoFTR on the Top‑K pairs (e.g., 640–840 px) followed by MAGSAC++.
+   - Accept pairs with ≥ 15 inliers and triangulation angle ≥ 2°.
+
+**Advantages**
+
+- Compatible with detector‑free LoFTR.
+- Robust under viewpoint and illumination changes.
+- CLS similarity correlates well with scene overlap, enabling efficient pair curation.
 
 ---
 
@@ -162,10 +184,11 @@ The IRLS solver reweights residuals iteratively, down-weighting ambiguous or low
 
 Global CLS descriptors naturally support long-range loop closure detection:
 
-1. Retrieve top-K nearest CLS embeddings.
-2. Verify via LightGlue or DINO patch re-matching.
-3. Add inter-component Sim(3) edges.
-4. Re-run PGO + BA.
+1. Retrieve top-K nearest CLS embeddings via FAISS (same index used for pair selection).
+2. Retrieve top-K nearest CLS embeddings via FAISS (same index used for pair selection).
+3. Verify via LightGlue or DINO patch re-matching.
+4. Add inter-component Sim(3) edges.
+5. Re-run PGO + BA.
 
 This enables **semantic loop closure** without requiring overlapping 3D points.
 
@@ -173,6 +196,7 @@ This enables **semantic loop closure** without requiring overlapping 3D points.
 
 ## 7. Implementation Highlights
 
+- **Pair Retrieval:** DINOv2 CLS embedding–based FAISS Top‑K selection (reciprocal, diverse)
 - **Local Matching:** LoFTR (default, detector-free); LightGlue optional fallback; MAGSAC++ verification
 - **Global Similarity:** DINOv2 CLS token cosine for retrieval & loop closure
 - **DINO Patches:** Attention‑guided Top‑K sampling (e.g., 800) for optional dense-ish assists
@@ -196,6 +220,8 @@ This enables **semantic loop closure** without requiring overlapping 3D points.
 - ATE / RPE ↓
 - Reprojection Error ↓
 - Runtime / Memory Cost
+- Pair Retrieval Precision / Recall
+- Inlier Rate after Retrieval
 
 ### Baselines
 
@@ -254,3 +280,5 @@ _All reported numbers for **Ours** use LoFTR (detector-free) as primary matcher 
 3. Graph-aware optimization for stable scene merging.
 
 This pipeline provides both a _conceptual_ and _practical_ leap toward unified Transformer-based visual reconstruction.
+
+Additionally, by replacing the traditional vocabulary-tree retrieval with **DINO CLS–based FAISS Top‑K selection**, the pipeline achieves detector-free scalability and robust pair selection compatible with LoFTR.
