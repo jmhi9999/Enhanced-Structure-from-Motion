@@ -255,14 +255,19 @@ def load_images(input_dir: str) -> List[str]:
 def save_features(features: Dict[str, Any], filepath: Path):
     """Save features in H5 format"""
     import h5py
+    import numbers
     
     with h5py.File(filepath, 'w') as f:
         for img_path, feat_data in features.items():
             grp = f.create_group(str(img_path))
-            grp.create_dataset('keypoints', data=feat_data['keypoints'])
-            grp.create_dataset('descriptors', data=feat_data['descriptors'])
-            grp.create_dataset('scores', data=feat_data['scores'])
-            grp.attrs['image_shape'] = feat_data['image_shape']
+            for key, value in feat_data.items():
+                if key == 'image_shape':
+                    grp.attrs['image_shape'] = value
+                elif isinstance(value, np.ndarray):
+                    grp.create_dataset(key, data=value)
+                elif isinstance(value, (numbers.Number, str)):
+                    grp.attrs[key] = value
+                # Skip non-serializable runtime helpers silently
 
 
 def load_features(filepath: Path) -> Dict[str, Any]:
@@ -274,11 +279,13 @@ def load_features(filepath: Path) -> Dict[str, Any]:
         for img_path in f.keys():
             grp = f[img_path]
             features[img_path] = {
-                'keypoints': grp['keypoints'][:],
-                'descriptors': grp['descriptors'][:],
-                'scores': grp['scores'][:],
-                'image_shape': tuple(grp.attrs['image_shape'])
+                key: grp[key][:] for key in grp.keys()
             }
+            if 'image_shape' in grp.attrs:
+                features[img_path]['image_shape'] = tuple(grp.attrs['image_shape'])
+            for attr_key, attr_val in grp.attrs.items():
+                if attr_key != 'image_shape':
+                    features[img_path][attr_key] = attr_val
     
     return features
 

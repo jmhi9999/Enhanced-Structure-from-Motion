@@ -528,7 +528,10 @@ class FeatureExtractorFactory:
     _extractors = {
         'superpoint': SuperPointExtractor,
         'aliked': ALIKEDExtractor,
-        'disk': DISKExtractor
+        'disk': DISKExtractor,
+        'dinov3': None,  # Lazy import
+        'dinov2': None,
+        'dino': None,
     }
     
     @classmethod
@@ -536,7 +539,23 @@ class FeatureExtractorFactory:
         """Create a feature extractor instance"""
         if extractor_type not in cls._extractors:
             raise ValueError(f"Unknown extractor type: {extractor_type}. Available: {list(cls._extractors.keys())}")
-        
+
+        if extractor_type in {'dinov3', 'dinov2', 'dino'}:
+            try:
+                from sfm.features.dino_feature_extractor import DINOFeatureExtractor
+            except ImportError as exc:
+                raise ImportError(
+                    "DINO feature extractor requested but dependencies are missing. "
+                    "Ensure the official DINO release (v2/v3) or a compatible timm model is installed."
+                ) from exc
+
+            config = dict(config or {})
+            if extractor_type == 'dinov2':
+                config.setdefault('model_family', 'dinov2')
+            else:
+                config.setdefault('model_family', 'dinov3')
+            return DINOFeatureExtractor(device, config)
+
         return cls._extractors[extractor_type](device, config)
     
     @classmethod

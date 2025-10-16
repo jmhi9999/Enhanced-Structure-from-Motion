@@ -16,6 +16,7 @@ pyceres>=0.1.0
 # Computer vision and feature extraction
 kornia>=0.6.12
 lightglue @ git+https://github.com/cvg/LightGlue.git
+timm>=0.9.10
 
 # JIT compilation and optimization
 numba>=0.58.0

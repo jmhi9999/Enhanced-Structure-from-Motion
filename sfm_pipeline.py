@@ -11,7 +11,7 @@ import sys
 import time
 import gc
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Tuple, Any
 
 import torch
 import numpy as np
@@ -29,6 +29,7 @@ from sfm.utils.io_utils import (
     save_matches,
 )
 from sfm.utils.image_utils import resize_image
+from sfm.pipelines import run_dino_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,8 @@ def parse_args():
     parser.add_argument(
         "--feature_extractor",
         type=str,
-        default="aliked",
-        choices=["superpoint", "aliked", "disk"],
+        default="dinov3",
+        choices=["superpoint", "aliked", "disk", "dinov3", "dinov2"],
         help="Feature extractor to use",
     )
     parser.add_argument(
@@ -212,6 +213,147 @@ def setup_logging(output_dir: str):
     )
 
 
+def _run_legacy_pair_selection_and_matching(
+    features: Dict[str, Any],
+    device: torch.device,
+    output_path: Path,
+    image_paths: List[str],
+    kwargs: Dict[str, Any],
+) -> Tuple[Dict[Tuple[str, str], Any], Dict[Tuple[str, str], Dict[str, torch.Tensor]], Dict[str, float]]:
+    """Original sequential pair selection and LightGlue matching pipeline."""
+    stage_times: Dict[str, float] = {}
+
+    logger.info("Stage 3: Smart pair selection (vocabulary tree + sequential)...")
+    stage_start = time.time()
+
+    sequential_overlap = 5
+    sequential_pairs: List[Tuple[str, str]] = []
+    sorted_image_paths = sorted(image_paths)
+
+    for i, img1 in enumerate(sorted_image_paths):
+        for j in range(1, min(sequential_overlap + 1, len(sorted_image_paths) - i)):
+            img2 = sorted_image_paths[i + j]
+            sequential_pairs.append((img1, img2))
+
+    logger.info(f"Generated {len(sequential_pairs)} sequential pairs")
+
+    if kwargs.get("use_vocab_tree", False):
+        vocab_tree = GPUVocabularyTree(
+            device=device,
+            config={
+                "vocab_size": 10000,
+                "vocab_depth": 6,
+                "vocab_branching_factor": 10,
+            },
+            output_path=str(output_path),
+        )
+
+        vocab_tree.build_vocabulary(features)
+        vocab_tree_pairs = vocab_tree.get_image_pairs_for_matching(
+            features, max_pairs_per_image=kwargs.get("max_pairs_per_image", 20)
+        )
+
+        image_pairs = list(set(sequential_pairs + vocab_tree_pairs))
+        logger.info(f"Selected {len(vocab_tree_pairs)} pairs using vocabulary tree")
+        logger.info(
+            f"Combined total: {len(image_pairs)} unique pairs (sequential + vocabulary tree)"
+        )
+    else:
+        image_pairs = sequential_pairs
+        logger.info(f"Using sequential matching: {len(image_pairs)} pairs")
+
+    stage_times["pair_selection"] = time.time() - stage_start
+    logger.info(f"Pair selection completed in {stage_times['pair_selection']:.2f}s")
+
+    if "vocab_tree" in locals():
+        try:
+            if hasattr(vocab_tree, "clear_memory"):
+                vocab_tree.clear_memory()
+            del vocab_tree
+        except Exception as e:
+            logger.warning(f"Error cleaning up vocabulary tree: {e}")
+
+    cleanup_gpu_memory(device, "pair selection")
+
+    logger.info("Stage 4: Feature matching...")
+    stage_start = time.time()
+
+    matches_file = output_path / "matches.h5"
+    matches_tensor_file = output_path / "matches_tensors.pt"
+    expected_pairs = len(image_pairs)
+
+    matches = None
+    matches_tensors = None
+
+    if matches_file.exists() and matches_tensor_file.exists():
+        try:
+            from sfm.utils.io_utils import load_matches
+
+            existing_matches = load_matches(matches_file)
+            existing_match_tensors = torch.load(
+                matches_tensor_file, map_location=device
+            )
+
+            if len(existing_matches) >= expected_pairs * 0.1:
+                logger.info(
+                    f"Found existing matches for {len(existing_matches)} pairs (expected ~{expected_pairs}), skipping matching"
+                )
+                matches = existing_matches
+                matches_tensors = existing_match_tensors
+                stage_times["feature_matching"] = 0.0
+        except Exception as e:
+            logger.info(f"Could not load matches ({e}), recomputing")
+
+    if matches is None:
+        matcher_config = {
+            "use_brute_force": kwargs.get("use_brute_force", True),
+            "use_vocabulary_tree": kwargs.get("use_vocab_tree", False),
+            "max_pairs_per_image": kwargs.get("max_pairs_per_image", 20),
+            "max_total_pairs": kwargs.get("max_total_pairs", None),
+            "parallel_workers": kwargs.get("num_workers", 4),
+            "batch_size": kwargs.get("batch_size", 32),
+        }
+
+        matcher = EnhancedLightGlueMatcher(
+            device=device,
+            use_brute_force=kwargs.get("use_brute_force", True),
+            use_vocabulary_tree=kwargs.get("use_vocab_tree", False),
+            feature_type=kwargs.get("feature_extractor", "superpoint"),
+            config=matcher_config,
+        )
+
+        if kwargs.get("use_vocab_tree", False):
+            matcher.config["predefined_pairs"] = image_pairs
+
+        matches = matcher.match_features(features)
+
+        matches_tensors = {}
+        for pair, match in matches.items():
+            matches_tensors[pair] = {
+                "matches0": torch.from_numpy(match["matches0"]).to(device),
+                "matches1": torch.from_numpy(match["matches1"]).to(device),
+                "mscores0": torch.from_numpy(match.get("mscores0", np.ones_like(match["matches0"], dtype=np.float32))).to(device),
+                "mscores1": torch.from_numpy(match.get("mscores1", np.ones_like(match["matches1"], dtype=np.float32))).to(device),
+            }
+
+        save_matches(matches, matches_file)
+        torch.save(matches_tensors, matches_tensor_file)
+
+        stage_times["feature_matching"] = time.time() - stage_start
+        logger.info(
+            f"Feature matching completed in {stage_times['feature_matching']:.2f}s"
+        )
+
+        if "matcher" in locals():
+            try:
+                matcher.clear_memory()
+                del matcher
+            except Exception as e:
+                logger.warning(f"Error cleaning up matcher: {e}")
+
+        cleanup_gpu_memory(device, "feature matching")
+
+    return matches, matches_tensors, stage_times
 def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     """Enhanced SfM pipeline for 3DGS - Main API function"""
 
@@ -385,200 +527,48 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
 
         cleanup_gpu_memory(device, "feature extraction")
 
-    # Stage 3: Smart pair selection (vocabulary tree + sequential)
-    logger.info("Stage 3: Smart pair selection (vocabulary tree + sequential)...")
-    stage_start = time.time()
-
-    # Always generate sequential pairs for temporal consistency
-    sequential_overlap = 5  # Number of consecutive images to match
-    sequential_pairs = []
-
-    # Sort image paths for sequential ordering
-    sorted_image_paths = sorted(image_paths)
-
-    for i, img1 in enumerate(sorted_image_paths):
-        # Match with next few images in sequence
-        for j in range(1, min(sequential_overlap + 1, len(sorted_image_paths) - i)):
-            img2 = sorted_image_paths[i + j]
-            sequential_pairs.append((img1, img2))
-
-    logger.info(f"Generated {len(sequential_pairs)} sequential pairs")
-
-    if kwargs.get("use_vocab_tree", False):
-        # Use vocabulary tree for additional similarity-based pairs
-        vocab_tree = GPUVocabularyTree(
-            device=device,
-            config={
-                "vocab_size": 10000,
-                "vocab_depth": 6,
-                "vocab_branching_factor": 10,
-            },
-            output_path=str(output_path),
-        )
-
-        # Build vocabulary
-        vocab_tree.build_vocabulary(features)
-
-        # Get vocabulary tree pairs
-        vocab_tree_pairs = vocab_tree.get_image_pairs_for_matching(
-            features, max_pairs_per_image=kwargs.get("max_pairs_per_image", 20)
-        )
-
-        # Combine sequential and vocabulary tree pairs (remove duplicates)
-        all_pairs = list(set(sequential_pairs + vocab_tree_pairs))
-        image_pairs = all_pairs
-
-        logger.info(f"Selected {len(vocab_tree_pairs)} pairs using vocabulary tree")
-        logger.info(
-            f"Combined total: {len(image_pairs)} unique pairs (sequential + vocabulary tree)"
-        )
-    else:
-        # Use only sequential pairs for smaller datasets
-        image_pairs = sequential_pairs
-        logger.info(f"Using sequential matching: {len(image_pairs)} pairs")
-
-    stage_times["pair_selection"] = time.time() - stage_start
-    logger.info(f"Pair selection completed in {stage_times['pair_selection']:.2f}s")
-
-    # Clean up vocabulary tree memory if used
-    if "vocab_tree" in locals():
-        try:
-            if hasattr(vocab_tree, "clear_memory"):
-                vocab_tree.clear_memory()
-            del vocab_tree
-        except Exception as e:
-            logger.warning(f"Error cleaning up vocabulary tree: {e}")
-
-    cleanup_gpu_memory(device, "pair selection")
-
-    # Stage 4: Feature matching
-    logger.info("Stage 4: Feature matching...")
-    stage_start = time.time()
-
-    # Check if matches already exist
+    feature_type = kwargs.get("feature_extractor", "superpoint")
     matches_file = output_path / "matches.h5"
     matches_tensor_file = output_path / "matches_tensors.pt"
 
-    # Calculate expected number of matches for validation
-    expected_pairs = len(image_pairs)
-
-    if matches_file.exists() and matches_tensor_file.exists():
-        try:
-            # Load existing matches and validate
-            from sfm.utils.io_utils import load_matches
-
-            existing_matches = load_matches(matches_file)
-            existing_match_tensors = torch.load(
-                matches_tensor_file, map_location=device
-            )
-
-            # Check if we have reasonable number of matches
-            if (
-                len(existing_matches) >= expected_pairs * 0.1
-            ):  # At least 10% success rate
-                logger.info(
-                    f"Found existing matches for {len(existing_matches)} pairs (expected ~{expected_pairs}), skipping matching"
-                )
-                matches = existing_matches
-                matches_tensors = existing_match_tensors
-                stage_times["feature_matching"] = 0.0
-            else:
-                logger.info(
-                    f"Match count too low: {len(existing_matches)} vs expected ~{expected_pairs}, re-matching"
-                )
-                raise ValueError("Match count too low")
-        except Exception as e:
-            logger.info(f"Could not load existing matches ({e}), matching new ones")
-            matches = None
-    else:
-        matches = None
-
-    if matches is None:
-        feature_type = kwargs.get("feature_extractor", "superpoint")
-
-        # Configure matcher based on vocabulary tree usage
-        matcher_config = {
-            "use_brute_force": kwargs.get("use_brute_force", True),
-            "use_vocabulary_tree": kwargs.get("use_vocab_tree", False),
-            "max_pairs_per_image": kwargs.get("max_pairs_per_image", 20),
-            "max_total_pairs": kwargs.get("max_total_pairs", None),
-            "output_path": str(output_path),
-        }
-
-        # If vocabulary tree was used, pass the selected pairs to the matcher
-        if kwargs.get("use_vocab_tree", False) and "image_pairs" in locals():
-            matcher_config["predefined_pairs"] = image_pairs
-            matcher_config["use_brute_force"] = (
-                False  # Force to use only predefined pairs
-            )
-
-        matcher = EnhancedLightGlueMatcher(
-            device=device, feature_type=feature_type, config=matcher_config
+    if feature_type in {"dinov3", "dinov2", "dino"}:
+        logger.info("Stage 3: DINO retrieval + LoFTR matching...")
+        features, matches, matches_tensors, dino_times = run_dino_pipeline(
+            processed_images=processed_images,
+            features=features,
+            device=device,
+            output_path=output_path,
+            kwargs=kwargs,
         )
+        stage_times.update(dino_times)
 
-        # Ensure features are in the correct format for the matcher
-        # If features were loaded from tensor file, ensure numpy format
-        formatted_features = {}
+        save_features(features, features_file)
+
+        features_tensors = {}
         for img_path, feat_data in features.items():
-            formatted_feat = {}
-            for key, value in feat_data.items():
-                if torch.is_tensor(value):
-                    formatted_feat[key] = value.cpu().numpy()
-                else:
-                    formatted_feat[key] = value
-            formatted_features[img_path] = formatted_feat
-
-        # Use the enhanced matcher
-        matches = matcher.match_features(formatted_features)
-
-        # Create tensor version for backup
-        matches_tensors = {}
-        for pair, match_result in matches.items():
-            matches_tensors[pair] = {
-                "matches0": torch.from_numpy(match_result["matches0"]).to(device),
-                "matches1": torch.from_numpy(match_result["matches1"]).to(device),
-                "mscores0": torch.from_numpy(match_result["mscores0"]).to(device),
-                "mscores1": torch.from_numpy(match_result["mscores1"]).to(device),
-                "image_shape0": match_result["image_shape0"],
-                "image_shape1": match_result["image_shape1"],
+            features_tensors[img_path] = {
+                "keypoints": torch.from_numpy(feat_data["keypoints"]).to(device),
+                "descriptors": torch.from_numpy(feat_data["descriptors"]).to(device),
+                "scores": torch.from_numpy(feat_data["scores"]).to(device),
+                "image_shape": feat_data["image_shape"],
+                "dino_cls": torch.from_numpy(feat_data.get("dino_cls", np.zeros((0,), dtype=np.float32))).to(device),
             }
+        torch.save(features_tensors, features_tensor_file)
 
-        # Save matches (traditional format)
         save_matches(matches, matches_file)
-
-        # Save matches as tensors for backup
         torch.save(matches_tensors, matches_tensor_file)
-        logger.info(f"Saved match tensors to {matches_tensor_file}")
 
-        stage_times["feature_matching"] = time.time() - stage_start
-        logger.info(
-            f"Feature matching completed in {stage_times['feature_matching']:.2f}s"
+        cleanup_gpu_memory(device, "DINO matching")
+
+    else:
+        matches, matches_tensors, legacy_times = _run_legacy_pair_selection_and_matching(
+            features=features,
+            device=device,
+            output_path=output_path,
+            image_paths=image_paths,
+            kwargs=kwargs,
         )
-
-        # Clean up matcher memory
-        if "matcher" in locals():
-            try:
-                if hasattr(matcher, "clear_memory"):
-                    matcher.clear_memory()
-                if hasattr(matcher, "matcher") and hasattr(
-                    matcher.matcher, "clear_memory"
-                ):
-                    matcher.matcher.clear_memory()
-                del matcher
-            except Exception as e:
-                logger.warning(f"Error cleaning up matcher: {e}")
-
-        # Clean up large tensor data
-        if "matches_tensors" in locals():
-            try:
-                del matches_tensors
-            except Exception as e:
-                logger.warning(f"Error cleaning up match tensors: {e}")
-
-        if "formatted_features" in locals():
-            del formatted_features
-
-        cleanup_gpu_memory(device, "feature matching")
+        stage_times.update(legacy_times)
 
     # Stage 4.5: Loop Closure Detection (optional)
     if kwargs.get("detect_loop_closures", False):
