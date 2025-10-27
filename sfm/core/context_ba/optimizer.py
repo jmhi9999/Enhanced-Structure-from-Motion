@@ -121,9 +121,10 @@ class ContextAwareBundleAdjustment:
         # Step 2: Initialize reconstruction (triangulation)
         self.logger.info("Initializing reconstruction...")
 
-        # Determine output path (use database_path's parent or create temp)
+        # Determine output path
         if database_path:
-            output_path = database_path.parent
+            # database_path is actually the output directory (not the .db file)
+            output_path = database_path if database_path.is_dir() else database_path.parent
         else:
             output_path = Path("./temp_colmap_init")
             output_path.mkdir(exist_ok=True)
@@ -185,6 +186,22 @@ class ContextAwareBundleAdjustment:
         P2 Optimization: Use Pose Graph Optimization for faster initialization
         on sequential video datasets (3-10x speedup).
         """
+        # First, check if reconstruction already exists (from GLOMAP or previous run)
+        sparse_dir = output_path / "sparse" / "0"
+        if sparse_dir.exists():
+            from ..colmap_binary import read_colmap_model
+            try:
+                self.logger.info(f"Found existing reconstruction at {sparse_dir}, loading...")
+                cameras, images, sparse_points = read_colmap_model(sparse_dir)
+                if cameras and images and sparse_points:
+                    self.logger.info(
+                        f"Loaded existing reconstruction: {len(cameras)} cameras, "
+                        f"{len(images)} images, {len(sparse_points)} points"
+                    )
+                    return cameras, images, sparse_points
+            except Exception as e:
+                self.logger.warning(f"Failed to load existing reconstruction: {e}")
+
         cameras = None
         images = None
         sparse_points = None

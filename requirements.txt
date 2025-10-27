@@ -18,6 +18,10 @@ kornia>=0.6.12
 lightglue @ git+https://github.com/cvg/LightGlue.git
 timm>=0.9.10
 
+# Global Structure-from-Motion backend
+# Install GLOMAP from: https://github.com/colmap/glomap
+# glomap @ git+https://github.com/colmap/glomap.git  # Uncomment when available via pip
+
 # JIT compilation and optimization
 numba>=0.58.0
 

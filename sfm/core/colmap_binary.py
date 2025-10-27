@@ -255,9 +255,82 @@ def create_colmap_database(features: Dict[str, Any], matches: Dict[Tuple[str, st
     return image_ids
 
 
+def run_glomap_binary(database_path: Path, image_dir: Path, output_path: Path) -> bool:
+    """Run GLOMAP using binary executable for global SfM reconstruction"""
+
+    sparse_path = output_path / "sparse" / "0"
+    sparse_path.mkdir(parents=True, exist_ok=True)
+
+    # GLOMAP binary path (from bin/ directory)
+    glomap_binary = Path(__file__).parent.parent.parent / "bin" / "glomap.exe"
+
+    if not glomap_binary.exists():
+        logger.error(f"GLOMAP binary not found at {glomap_binary}")
+        logger.error("Please install GLOMAP and place the binary in the bin/ directory")
+        return False
+
+    logger.info("Running GLOMAP global reconstruction...")
+    cmd = [
+        str(glomap_binary), "mapper",
+        "--database_path", str(database_path),
+        "--output_path", str(sparse_path)
+    ]
+
+    try:
+        logger.info(f"Running command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+        logger.info(f"GLOMAP mapper return code: {result.returncode}")
+        logger.info(f"GLOMAP stdout: {result.stdout}")
+        if result.stderr:
+            logger.warning(f"GLOMAP stderr: {result.stderr}")
+
+        if result.returncode == 0:
+            logger.info("GLOMAP global reconstruction completed successfully")
+
+            # GLOMAP creates an additional /0/ subdirectory, move files up
+            glomap_model_path = sparse_path / "0"
+            if glomap_model_path.exists():
+                import shutil
+                logger.info(f"Moving GLOMAP output from {glomap_model_path} to {sparse_path}")
+                for file in glomap_model_path.glob("*"):
+                    shutil.move(str(file), str(sparse_path / file.name))
+                # Remove empty directory
+                glomap_model_path.rmdir()
+
+            # Convert binary to text format for easier reading
+            model_converter_cmd = [
+                "colmap", "model_converter",
+                "--input_path", str(sparse_path),
+                "--output_path", str(sparse_path),
+                "--output_type", "TXT"
+            ]
+
+            try:
+                logger.info("Converting GLOMAP binary to text format...")
+                converter_result = subprocess.run(model_converter_cmd, capture_output=True, text=True, timeout=120)
+                if converter_result.returncode == 0:
+                    logger.info("Binary to text conversion successful")
+                else:
+                    logger.warning(f"Binary to text conversion failed: {converter_result.stderr}")
+            except Exception as e:
+                logger.warning(f"Model converter error (non-critical): {e}")
+
+            return True
+        else:
+            logger.error(f"GLOMAP reconstruction failed with return code {result.returncode}")
+            return False
+    except subprocess.TimeoutExpired:
+        logger.error("GLOMAP reconstruction timed out")
+        return False
+    except Exception as e:
+        logger.error(f"GLOMAP reconstruction error: {e}")
+        return False
+
+
 def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -> bool:
     """Run COLMAP using binary executable"""
-    
+
     sparse_path = output_path / "sparse"
     sparse_path.mkdir(exist_ok=True)
     
@@ -674,14 +747,22 @@ def read_points3d_binary(path_to_model_file: Path) -> Dict[int, Dict]:
 
 def read_colmap_text_results(sparse_path: Path) -> Tuple[Dict, Dict, Dict]:
     """Read COLMAP text results (fallback when binary reading fails)"""
+    sparse_path = Path(sparse_path)
     
-    # Look for reconstruction directory
-    reconstruction_dirs = [d for d in sparse_path.iterdir() if d.is_dir()]
-    if not reconstruction_dirs:
-        logger.warning("No reconstruction found")
+    if not sparse_path.exists():
+        logger.warning(f"No reconstruction found at {sparse_path}")
         return {}, {}, {}
     
-    recon_dir = reconstruction_dirs[0]
+    if (sparse_path / "cameras.txt").exists():
+        recon_dir = sparse_path
+    else:
+        # Look for reconstruction directory (e.g. sparse/0)
+        reconstruction_dirs = sorted([d for d in sparse_path.iterdir() if d.is_dir()])
+        if not reconstruction_dirs:
+            logger.warning("No reconstruction found")
+            return {}, {}, {}
+        recon_dir = reconstruction_dirs[0]
+    
     logger.info(f"Reading COLMAP text results from {recon_dir}")
     
     cameras_file = recon_dir / "cameras.txt"
@@ -907,39 +988,158 @@ def read_colmap_binary_results(sparse_path: Path) -> Tuple[Dict, Dict, Dict]:
             return {}, {}, {}
 
 
-def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[str, str], Any],
-                                output_path: Path, image_dir: Path) -> Tuple[Dict, Dict, Dict]:
-    """Run complete COLMAP reconstruction using binary executable"""
-    
+def read_colmap_model(model_path: Path) -> Tuple[Dict[int, Any], Dict[int, Any], Dict[int, Any]]:
+    """
+    Load a COLMAP model (binary or text) from the provided path.
+
+    Returns:
+        Tuple of (cameras, images, points3d) dictionaries.
+    """
+    model_path = Path(model_path)
+    if not model_path.exists():
+        logger.error(f"COLMAP model path does not exist: {model_path}")
+        return {}, {}, {}
+
+    if not model_path.is_dir():
+        logger.error(f"COLMAP model path is not a directory: {model_path}")
+        return {}, {}, {}
+
+    # Resolve the reconstruction directory which actually contains the COLMAP files.
+    recon_dir = model_path
+    has_model_files = any((recon_dir / fname).exists() for fname in (
+        "cameras.bin", "images.bin", "points3D.bin",
+        "cameras.txt", "images.txt", "points3D.txt",
+    ))
+    if not has_model_files:
+        subdirs = sorted([d for d in recon_dir.iterdir() if d.is_dir()])
+        if not subdirs:
+            logger.warning(f"No COLMAP reconstruction data found under {model_path}")
+            return {}, {}, {}
+        recon_dir = subdirs[0]
+
+    cameras: Dict[int, Any] = {}
+    images: Dict[int, Any] = {}
+    points3d: Dict[int, Any] = {}
+
+    cameras_file = recon_dir / "cameras.bin"
+    images_file = recon_dir / "images.bin"
+    points_file = recon_dir / "points3D.bin"
+
+    if cameras_file.exists():
+        cameras = read_cameras_binary(cameras_file)
+    if images_file.exists():
+        images = read_images_binary(images_file)
+    if points_file.exists():
+        points3d = read_points3d_binary(points_file)
+
+    # Fallback to text data for any missing components.
+    missing_cameras = len(cameras) == 0
+    missing_images = len(images) == 0
+    missing_points = len(points3d) == 0
+    if missing_cameras or missing_images or missing_points:
+        text_points3d, text_cameras, text_images = read_colmap_text_results(recon_dir)
+        if missing_cameras:
+            cameras = text_cameras
+        if missing_images:
+            images = text_images
+        if missing_points:
+            points3d = {}
+            for point_id, point_data in text_points3d.items():
+                track = point_data.get('track', [])
+                image_ids = np.array([img_id for img_id, _ in track], dtype=np.int64)
+                point2d_idxs = np.array([idx for _, idx in track], dtype=np.int64)
+                points3d[point_id] = {
+                    'xyz': np.array(point_data.get('xyz', [0.0, 0.0, 0.0]), dtype=np.float64),
+                    'rgb': np.array(point_data.get('rgb', [0, 0, 0]), dtype=np.int64),
+                    'error': point_data.get('error', 0.0),
+                    'image_ids': image_ids,
+                    'point2D_idxs': point2d_idxs,
+                    'track': track,
+                }
+
+    # Normalize data types and ensure required fields are present.
+    for cam_id, cam_data in cameras.items():
+        if isinstance(cam_data.get('params'), list):
+            cam_data['params'] = np.asarray(cam_data['params'], dtype=np.float64)
+
+    for image_key, image_data in images.items():
+        if 'colmap_image_id' not in image_data:
+            try:
+                image_data['colmap_image_id'] = int(image_key)
+            except (TypeError, ValueError):
+                # Leave as-is if we cannot infer an integer ID
+                pass
+        if not isinstance(image_data.get('qvec'), np.ndarray):
+            image_data['qvec'] = np.asarray(image_data.get('qvec', []), dtype=np.float64)
+        if not isinstance(image_data.get('tvec'), np.ndarray):
+            image_data['tvec'] = np.asarray(image_data.get('tvec', []), dtype=np.float64)
+        if 'xys' in image_data and not isinstance(image_data['xys'], np.ndarray):
+            image_data['xys'] = np.asarray(image_data['xys'], dtype=np.float64).reshape(-1, 2)
+        if 'point3D_ids' in image_data and not isinstance(image_data['point3D_ids'], np.ndarray):
+            image_data['point3D_ids'] = np.asarray(image_data['point3D_ids'], dtype=np.int64)
+
+    for point_id, point_data in points3d.items():
+        if not isinstance(point_data.get('xyz'), np.ndarray):
+            point_data['xyz'] = np.asarray(point_data.get('xyz', []), dtype=np.float64)
+        if not isinstance(point_data.get('rgb'), np.ndarray):
+            point_data['rgb'] = np.asarray(point_data.get('rgb', [0, 0, 0]), dtype=np.int64)
+
+        track = point_data.get('track')
+        if 'image_ids' not in point_data:
+            if track is not None:
+                point_data['image_ids'] = np.asarray([img_id for img_id, _ in track], dtype=np.int64)
+            else:
+                point_data['image_ids'] = np.array([], dtype=np.int64)
+        elif not isinstance(point_data['image_ids'], np.ndarray):
+            point_data['image_ids'] = np.asarray(point_data['image_ids'], dtype=np.int64)
+
+        if 'point2D_idxs' not in point_data:
+            if track is not None:
+                point_data['point2D_idxs'] = np.asarray([idx for _, idx in track], dtype=np.int64)
+            else:
+                point_data['point2D_idxs'] = np.array([], dtype=np.int64)
+        elif not isinstance(point_data['point2D_idxs'], np.ndarray):
+            point_data['point2D_idxs'] = np.asarray(point_data['point2D_idxs'], dtype=np.int64)
+
+        if track is None:
+            point_data['track'] = list(zip(point_data['image_ids'].tolist(), point_data['point2D_idxs'].tolist()))
+
+    return cameras, images, points3d
+
+
+def glomap_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[str, str], Any],
+                         output_path: Path, image_dir: Path) -> Tuple[Dict, Dict, Dict]:
+    """Run complete GLOMAP global reconstruction using binary executable"""
+
     database_path = output_path / "database.db"
-    
+
     # First filter matches with cv2 MAGSAC
     filtered_matches = filter_matches_with_magsac(features, matches)
-    
+
     if not filtered_matches:
         logger.error("No matches passed MAGSAC filtering")
         return {}, {}, {}
-    
+
     # Create database with filtered matches
     image_ids = create_colmap_database(features, filtered_matches, database_path)
-    
-    # Run COLMAP binary
-    success = run_colmap_binary(database_path, image_dir, output_path)
-    
+
+    # Run GLOMAP binary
+    success = run_glomap_binary(database_path, image_dir, output_path)
+
     if success:
-        # Read results
+        # Read results (GLOMAP outputs same format as COLMAP)
         points3d, cameras, images = read_colmap_binary_results(output_path / "sparse")
-        
+
         # Convert images dictionary from image_id keys to image_path keys for pipeline compatibility
         images_by_path = {}
         logger.info(f"Converting {len(images)} images from ID-based to path-based keys")
         logger.debug(f"Original images keys (sample): {list(images.keys())[:3]}")
         logger.debug(f"Features keys (sample): {list(features.keys())[:3]}")
-        
+
         conversion_success = 0
         for image_id, img_data in images.items():
             image_name = img_data.get('name', f'unknown_image_{image_id}')
-            
+
             # Find matching image path from original features (they should have matching basenames)
             matching_path = None
             for img_path in features.keys():
@@ -947,10 +1147,79 @@ def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[s
                     matching_path = img_path
                     conversion_success += 1
                     break
-            
+
             # Use matching path if found, otherwise use name as fallback
             key = matching_path if matching_path else image_name
-            
+
+            # Ensure all required fields exist
+            img_data_copy = img_data.copy()
+            if 'name' not in img_data_copy:
+                img_data_copy['name'] = image_name
+            # Ensure camera_id is preserved from GLOMAP results
+            if 'camera_id' not in img_data_copy and 'camera_id' in img_data:
+                img_data_copy['camera_id'] = img_data['camera_id']
+            # Preserve original GLOMAP image ID for downstream modules (e.g., context BA)
+            img_data_copy['glomap_image_id'] = image_id
+
+            images_by_path[key] = img_data_copy
+
+            if not matching_path:
+                logger.warning(f"Could not match image {image_name} to original feature path, using name as key")
+
+        logger.info(f"Successfully converted {conversion_success}/{len(images)} images to path-based keys")
+        if conversion_success < len(images):
+            logger.warning(f"Some images could not be matched to original paths")
+
+        return points3d, cameras, images_by_path
+    else:
+        logger.error("GLOMAP reconstruction failed")
+        return {}, {}, {}
+
+
+def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[str, str], Any],
+                                output_path: Path, image_dir: Path) -> Tuple[Dict, Dict, Dict]:
+    """Run complete COLMAP reconstruction using binary executable"""
+
+    database_path = output_path / "database.db"
+
+    # First filter matches with cv2 MAGSAC
+    filtered_matches = filter_matches_with_magsac(features, matches)
+
+    if not filtered_matches:
+        logger.error("No matches passed MAGSAC filtering")
+        return {}, {}, {}
+
+    # Create database with filtered matches
+    image_ids = create_colmap_database(features, filtered_matches, database_path)
+
+    # Run COLMAP binary
+    success = run_colmap_binary(database_path, image_dir, output_path)
+
+    if success:
+        # Read results
+        points3d, cameras, images = read_colmap_binary_results(output_path / "sparse")
+
+        # Convert images dictionary from image_id keys to image_path keys for pipeline compatibility
+        images_by_path = {}
+        logger.info(f"Converting {len(images)} images from ID-based to path-based keys")
+        logger.debug(f"Original images keys (sample): {list(images.keys())[:3]}")
+        logger.debug(f"Features keys (sample): {list(features.keys())[:3]}")
+
+        conversion_success = 0
+        for image_id, img_data in images.items():
+            image_name = img_data.get('name', f'unknown_image_{image_id}')
+
+            # Find matching image path from original features (they should have matching basenames)
+            matching_path = None
+            for img_path in features.keys():
+                if Path(img_path).name == image_name:
+                    matching_path = img_path
+                    conversion_success += 1
+                    break
+
+            # Use matching path if found, otherwise use name as fallback
+            key = matching_path if matching_path else image_name
+
             # Ensure all required fields exist
             img_data_copy = img_data.copy()
             if 'name' not in img_data_copy:
@@ -960,16 +1229,16 @@ def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[s
                 img_data_copy['camera_id'] = img_data['camera_id']
             # Preserve original COLMAP image ID for downstream modules (e.g., context BA)
             img_data_copy['colmap_image_id'] = image_id
-            
+
             images_by_path[key] = img_data_copy
-            
+
             if not matching_path:
                 logger.warning(f"Could not match image {image_name} to original feature path, using name as key")
-        
+
         logger.info(f"Successfully converted {conversion_success}/{len(images)} images to path-based keys")
         if conversion_success < len(images):
             logger.warning(f"Some images could not be matched to original paths")
-            
+
         return points3d, cameras, images_by_path
     else:
         logger.error("COLMAP reconstruction failed")

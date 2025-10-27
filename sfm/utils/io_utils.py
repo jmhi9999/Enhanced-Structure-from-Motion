@@ -3,7 +3,7 @@ I/O utilities for saving SfM results in COLMAP format
 """
 
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple, List
 from pathlib import Path
 import json
 import shutil
@@ -293,18 +293,26 @@ def load_features(filepath: Path) -> Dict[str, Any]:
 def save_matches(matches: Dict[Tuple[str, str], Any], filepath: Path):
     """Save matches in H5 format"""
     import h5py
-    
+
     with h5py.File(filepath, 'w') as f:
         for i, (pair, match_data) in enumerate(matches.items()):
             grp = f.create_group(f'match_{i}')
             grp.attrs['img1'] = pair[0]
             grp.attrs['img2'] = pair[1]
-            
+
             for key, value in match_data.items():
                 if isinstance(value, np.ndarray):
+                    # Skip arrays with object dtype
+                    if value.dtype == np.object_:
+                        continue
                     grp.create_dataset(key, data=value)
-                else:
+                elif isinstance(value, (int, float, bool, str)):
+                    # Store primitive types as attributes
                     grp.attrs[key] = value
+                elif isinstance(value, (np.integer, np.floating, np.bool_)):
+                    # Convert numpy scalars to Python types
+                    grp.attrs[key] = value.item()
+                # Skip other unsupported types
 
 
 def load_matches(filepath: Path) -> Dict[Tuple[str, str], Any]:

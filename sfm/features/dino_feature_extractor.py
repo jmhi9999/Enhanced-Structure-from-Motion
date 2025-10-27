@@ -131,7 +131,12 @@ class DINOFeatureExtractor(BaseFeatureExtractor):
             timm_name = self.config.get("timm_model_name", self.timm_model_name)
             try:
                 LOGGER.info("Falling back to timm model %s for DINOv3 backbone", timm_name)
-                self.model = timm.create_model(timm_name, pretrained=True)
+                self.model = timm.create_model(
+                    timm_name,
+                    pretrained=True,
+                    dynamic_img_size=True,  # Allow variable input sizes
+                    num_classes=0  # Remove classification head
+                )
                 self.model.to(self.device)
                 self.patch_size = self._infer_patch_size(self.model)
                 self.embed_dim = self._infer_embed_dim(self.model)
@@ -173,17 +178,51 @@ class DINOFeatureExtractor(BaseFeatureExtractor):
         )
 
     def _setup_dinov2_model(self) -> None:
+        errors = []
+
+        # 1) Attempt timm first (Python 3.9 compatible)
+        if TIMM_AVAILABLE:
+            # Map hub model names to timm equivalents
+            timm_name_map = {
+                "dinov2_vits14": "vit_small_patch14_dinov2",
+                "dinov2_vitb14": "vit_base_patch14_dinov2",
+                "dinov2_vitl14": "vit_large_patch14_dinov2",
+                "dinov2_vitg14": "vit_giant_patch14_dinov2",
+            }
+            timm_name = timm_name_map.get(self.model_name, self.timm_model_name)
+
+            try:
+                LOGGER.info("Loading DINOv2 model %s via timm", timm_name)
+                self.model = timm.create_model(
+                    timm_name,
+                    pretrained=True,
+                    dynamic_img_size=True,  # Allow variable input sizes
+                    num_classes=0  # Remove classification head
+                )
+                self.model.to(self.device)
+                self.patch_size = self._infer_patch_size(self.model)
+                self.embed_dim = self._infer_embed_dim(self.model)
+                LOGGER.info("DINOv2 model loaded successfully via timm")
+                return
+            except Exception as exc:
+                errors.append(f"timm: {exc}")
+
+        # 2) Fallback to torch.hub (requires Python 3.10+)
         try:
             LOGGER.info("Loading DINOv2 model %s from %s", self.model_name, self.hub_repo)
             self.model = torch.hub.load(self.hub_repo, self.model_name, pretrained=True)  # type: ignore[attr-defined]
             self.model.to(self.device)
             self.patch_size = self._infer_patch_size(self.model)
             self.embed_dim = self._infer_embed_dim(self.model)
+            LOGGER.info("DINOv2 model loaded successfully via torch.hub")
+            return
         except Exception as exc:
-            raise ImportError(
-                f"Failed to load DINOv2 model '{self.model_name}' from repo '{self.hub_repo}'. "
-                "Install the official DINOv2 release or pass a custom checkpoint."
-            ) from exc
+            errors.append(f"torch.hub: {exc}")
+
+        raise ImportError(
+            f"Failed to load DINOv2 model '{self.model_name}'. Tried: {errors}. "
+            "Ensure timm is installed (pip install timm) or use Python 3.10+ for torch.hub."
+        )
 
     # ------------------------------------------------------------------
     # Feature extraction
@@ -203,6 +242,9 @@ class DINOFeatureExtractor(BaseFeatureExtractor):
             for idx, path in enumerate(paths):
                 meta = metas[idx]
                 cls_token = outputs["cls"][idx].cpu().numpy()
+                # Flatten CLS token to 1D vector for consistency
+                if cls_token.ndim > 1:
+                    cls_token = cls_token.flatten()
                 patch_tokens = outputs["patch_tokens"][idx]
 
                 attn_map = self._compute_attention_map(idx, outputs, meta, patch_tokens)
@@ -315,10 +357,13 @@ class DINOFeatureExtractor(BaseFeatureExtractor):
         except TypeError:
             out = self.model.forward_features(batch_tensor)  # type: ignore[attr-defined]
 
+        LOGGER.debug(f"Model output type: {type(out)}, shape/keys: {out.shape if isinstance(out, torch.Tensor) else (out.keys() if isinstance(out, dict) else len(out))}")
+
         try:
             if isinstance(out, dict):
                 cls_token = out.get("x_cls") or out.get("x_norm_clstoken") or out.get("cls_token")
                 patch_tokens = out.get("x_patch") or out.get("x_norm_patchtokens") or out.get("patch_tokens")
+                LOGGER.debug(f"Dict output - Available keys: {list(out.keys())}")
                 if cls_token is None or patch_tokens is None:
                     raise KeyError("Missing tokens from forward_features dictionary.")
             elif isinstance(out, tuple) and len(out) == 2:
@@ -326,8 +371,9 @@ class DINOFeatureExtractor(BaseFeatureExtractor):
             elif isinstance(out, torch.Tensor) and out.dim() == 3:
                 cls_token = out[:, 0:1, :]
                 patch_tokens = out[:, 1:, :]
+                LOGGER.debug(f"Tensor output - shape: {out.shape}, cls: {cls_token.shape}, patches: {patch_tokens.shape}")
             else:
-                raise ValueError("Unexpected forward_features output format.")
+                raise ValueError(f"Unexpected forward_features output format: {type(out)}")
         except Exception:
             if hasattr(self.model, "get_intermediate_layers"):
                 LOGGER.debug("Falling back to get_intermediate_layers for token extraction.")
@@ -349,6 +395,10 @@ class DINOFeatureExtractor(BaseFeatureExtractor):
             cls_token = F.normalize(cls_token, dim=-1)
             patch_tokens = F.normalize(patch_tokens, dim=-1)
 
+        LOGGER.debug(
+            f"Extracted tokens - CLS: {cls_token.shape}, Patches: {patch_tokens.shape}"
+        )
+
         results["cls"] = cls_token
         results["patch_tokens"] = patch_tokens
         return results
@@ -360,11 +410,32 @@ class DINOFeatureExtractor(BaseFeatureExtractor):
         meta: _PatchMeta,
         patch_tokens: torch.Tensor,
     ) -> np.ndarray:
-        if self._last_attention is not None:
-            attn = self._last_attention[batch_index]
-            attn_cls = attn[:, 0, 1:]
-            attn_map = attn_cls.mean(dim=0)
-        else:
+        # Early validation: check if we have valid patch tokens
+        if patch_tokens.shape[0] == 0:
+            LOGGER.warning(
+                f"Empty patch_tokens (shape={patch_tokens.shape}), returning empty attention map"
+            )
+            return np.zeros((0, 0), dtype=np.float32)
+
+        if self._last_attention is not None and self._last_attention.dim() >= 3:
+            try:
+                attn = self._last_attention[batch_index]
+                # Expected shape: [num_heads, seq_len, seq_len] or [seq_len, seq_len]
+                if attn.dim() == 3:
+                    # [num_heads, seq_len, seq_len] - use CLS attention (first token)
+                    attn_cls = attn[:, 0, 1:]  # [num_heads, num_patches]
+                    attn_map = attn_cls.mean(dim=0)  # Average over heads
+                elif attn.dim() == 2:
+                    # [seq_len, seq_len] - use CLS attention
+                    attn_map = attn[0, 1:]  # [num_patches]
+                else:
+                    raise ValueError(f"Unexpected attention shape: {attn.shape}")
+            except Exception as e:
+                LOGGER.debug(f"Failed to extract attention map: {e}, falling back to CLS similarity")
+                self._last_attention = None
+
+        if self._last_attention is None or self._last_attention.dim() < 3:
+            # Fallback: compute similarity between CLS and patch tokens
             cls_token = outputs["cls"][batch_index].unsqueeze(0)
             patches = patch_tokens
             attn_map = torch.einsum("nc,mc->n", patches, cls_token)
@@ -372,14 +443,52 @@ class DINOFeatureExtractor(BaseFeatureExtractor):
             if attn_map.max() > 0:
                 attn_map = attn_map / attn_map.max()
 
-        attn_map = attn_map.reshape(meta.grid_hw[0], meta.grid_hw[1])
+        # Reshape attention map based on actual patch token count
+        num_patches = attn_map.numel()
+        expected_patches = meta.grid_hw[0] * meta.grid_hw[1]
+
+        if num_patches != expected_patches:
+            # Compute actual grid size based on patch tokens
+            # Try to maintain aspect ratio close to original
+            aspect_ratio = meta.grid_hw[1] / meta.grid_hw[0]
+            grid_h = int(np.sqrt(num_patches / aspect_ratio))
+            grid_w = num_patches // grid_h
+
+            # Adjust if needed to match exact count
+            if grid_h * grid_w != num_patches:
+                # Fall back to closest square grid
+                grid_h = grid_w = int(np.sqrt(num_patches))
+                if grid_h * grid_w < num_patches:
+                    grid_h += 1
+                    grid_w = (num_patches + grid_h - 1) // grid_h
+
+            LOGGER.debug(
+                f"Adjusting grid from {meta.grid_hw} to ({grid_h}, {grid_w}) "
+                f"for {num_patches} patches"
+            )
+
+            # Pad if necessary
+            if grid_h * grid_w > num_patches:
+                pad_size = grid_h * grid_w - num_patches
+                attn_map = torch.cat([attn_map, torch.zeros(pad_size, device=attn_map.device)])
+
+            actual_grid_hw = (grid_h, grid_w)
+        else:
+            actual_grid_hw = meta.grid_hw
+
+        attn_map = attn_map.reshape(actual_grid_hw[0], actual_grid_hw[1])
         attn_np = attn_map.detach().cpu().numpy().astype(np.float32)
 
+        # Remove padding with bounds checking
         pad_h, pad_w = meta.pad_hw
-        if pad_h > 0:
-            attn_np = attn_np[: -(pad_h // meta.patch_size[0]), :]
-        if pad_w > 0:
-            attn_np = attn_np[:, : -(pad_w // meta.patch_size[1])]
+        if pad_h > 0 and meta.patch_size[0] > 0:
+            rows_to_remove = pad_h // meta.patch_size[0]
+            if rows_to_remove > 0 and rows_to_remove < attn_np.shape[0]:
+                attn_np = attn_np[:-rows_to_remove, :]
+        if pad_w > 0 and meta.patch_size[1] > 0:
+            cols_to_remove = pad_w // meta.patch_size[1]
+            if cols_to_remove > 0 and cols_to_remove < attn_np.shape[1]:
+                attn_np = attn_np[:, :-cols_to_remove]
 
         return attn_np
 
@@ -393,6 +502,20 @@ class DINOFeatureExtractor(BaseFeatureExtractor):
         grid_h, grid_w = attention_map.shape
         total_valid = grid_h * grid_w
 
+        # Handle case where no valid patches exist
+        if total_valid == 0:
+            LOGGER.warning(
+                f"No valid patches found (grid={grid_h}x{grid_w}), returning empty features"
+            )
+            return {
+                "keypoints": np.zeros((0, 2), dtype=np.float32),
+                "descriptors": np.zeros((0, self.embed_dim), dtype=np.float32),
+                "scores": np.zeros((0,), dtype=np.float32),
+                "all_patch_coords": np.zeros((0, 2), dtype=np.float32),
+                "all_patch_attention": np.zeros((0,), dtype=np.float32),
+                "attention_map": attention_map.astype(np.float32),
+            }
+
         all_coords = self._compute_patch_centers(grid_h, grid_w, meta)
         all_attention = attention_map.reshape(-1)
 
@@ -401,12 +524,19 @@ class DINOFeatureExtractor(BaseFeatureExtractor):
             patch_tokens_np = patch_tokens_np[:total_valid]
 
         max_kp = min(self.max_keypoints, total_valid)
+
+        # Debug logging
+        if max_kp == 0:
+            LOGGER.warning(
+                f"max_kp=0 (max_keypoints={self.max_keypoints}, total_valid={total_valid})"
+            )
+
         top_indices = np.argsort(all_attention)[::-1][:max_kp]
 
         keypoints = all_coords[top_indices]
         descriptors = patch_tokens_np[top_indices]
         scores = all_attention[top_indices]
-        if scores.max() > 0:
+        if len(scores) > 0 and scores.max() > 0:
             scores = scores / (scores.max() + 1e-6)
 
         return {

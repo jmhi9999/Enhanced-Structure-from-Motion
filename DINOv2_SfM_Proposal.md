@@ -80,12 +80,12 @@ matches = match_dino_patches(feat_i, feat_j, cos_thresh=0.8, topk_i=800, topk_j=
 
 ### Integration with Detector-Free Matching
 
-LoFTR remains the primary source of metric correspondences. DINO patch matches influence the pipeline as follows:
+**LoFTR is the primary matcher** for generating metric correspondences. DINO patch matches influence the pipeline as follows:
 
 1. **Pre-filtering.** Images with low average DINO cosine score skip heavy LoFTR processing, conserving runtime on non-overlapping pairs.
-2. **Guided LoFTR.** High-attention DINO patches define spatial masks that bias LoFTR’s coarse stage, improving robustness in textureless regions.
-3. **Fallback Tracks.** When LoFTR produces <15 inliers, the top-k DINO patch matches (verified with MAGSAC++) seed sparse tracks so that downstream Sim(3) merging still has anchors.
-4. **Residual Weighting.** The attention scores from the surviving patch correspondences become `A_{ij}` terms inside bundle adjustment weights (Section 5).
+2. **Guided LoFTR.** High-attention DINO patches define spatial masks that bias LoFTR's coarse stage, improving robustness in textureless regions.
+3. **Pose-only Estimation (Fallback).** When LoFTR produces <15 inliers, DINO patch matches (verified with MAGSAC++) are used to estimate relative pose and add edges to the pose graph, but **NOT for direct 3D triangulation** due to spatial coarseness (±7px uncertainty from 14×14 patches). These edges enable Sim(3) merging without contributing BA residuals.
+4. **Residual Weighting.** For successful LoFTR matches, DINO attention scores at corresponding patch locations become `A_{ij}` terms inside bundle adjustment weights (Section 5).
 
 ## 2c. Image Retrieval and Pair Selection (CLS-based Top-K)
 
@@ -135,6 +135,53 @@ Since LoFTR is detector-free, we replace the traditional **vocabulary tree** app
 - Compatible with detector‑free LoFTR.
 - Robust under viewpoint and illumination changes.
 - CLS similarity correlates well with scene overlap, enabling efficient pair curation.
+
+---
+
+## 2d. Global Graph-Based Reconstruction
+
+We adopt a **global SfM** approach (specifically GLOMAP) rather than incremental registration. This aligns naturally with our graph-aware design and addresses Problem 2 (scale drift).
+
+### Why Global SfM?
+
+**GLOMAP (Global Structure-from-Motion)** optimizes all camera poses simultaneously on a view graph, ensuring:
+
+1. **Global scale consistency** — No incremental drift; all scales resolved jointly
+2. **Natural component merging** — Disconnected subgraphs aligned via Sim(3) in a unified framework
+3. **Explicit graph structure** — View graph serves as backbone for DINO weighting
+
+### Pipeline Integration
+
+```text
+[LoFTR Matches + MAGSAC++]
+  ↓
+[View Graph Construction]
+  - Nodes: Cameras
+  - Edges: Relative poses (E matrix decomposition)
+  - Weights: N_inlier × cos(CLS_i, CLS_j)  ← DINO enhancement!
+  ↓
+[Rotation Averaging (graph-based)]
+  - Minimize: Σ_edges w_ij · || R_j - R_i * R_ij ||²
+  - DINO weights prioritize high-confidence edges
+  ↓
+[Translation Averaging (graph-based)]
+  - Solve for global camera positions under scale constraints
+  ↓
+[Triangulation using global poses]
+  ↓
+[Context-Aware Bundle Adjustment (Section 5)]
+```
+
+### Advantages over Incremental SfM
+
+| | Incremental (COLMAP) | Global (GLOMAP + Ours) |
+|---|---|---|
+| **Scale consistency** | ⚠️ Drift accumulates | ✅ Globally consistent |
+| **Component merging** | ⚠️ Difficult | ✅ Native Sim(3) support |
+| **Graph structure** | ❌ Implicit | ✅ Explicit view graph |
+| **DINO integration** | Limited | ✅ Natural edge weighting |
+
+**Implementation note:** We use GLOMAP as the reconstruction backend, modified to accept our DINO-enhanced edge weights during rotation/translation averaging.
 
 ---
 
@@ -201,10 +248,9 @@ The IRLS solver reweights residuals iteratively, down-weighting ambiguous or low
 Global CLS descriptors naturally support long-range loop closure detection:
 
 1. Retrieve top-K nearest CLS embeddings via FAISS (same index used for pair selection).
-2. Retrieve top-K nearest CLS embeddings via FAISS (same index used for pair selection).
-3. Verify via LightGlue or DINO patch re-matching.
-4. Add inter-component Sim(3) edges.
-5. Re-run PGO + BA.
+2. Verify via LoFTR or DINO patch re-matching.
+3. Add inter-component Sim(3) edges to the view graph.
+4. Re-run rotation/translation averaging + BA.
 
 This enables **semantic loop closure** without requiring overlapping 3D points.
 
@@ -212,13 +258,15 @@ This enables **semantic loop closure** without requiring overlapping 3D points.
 
 ## 7. Implementation Highlights
 
+- **Reconstruction Backend:** GLOMAP (global SfM) with DINO-enhanced edge weights
 - **Pair Retrieval:** DINOv3 CLS embedding–based FAISS Top‑K selection (reciprocal, diverse)
-- **Local Matching:** LoFTR (default, detector-free); LightGlue optional fallback; MAGSAC++ verification
+- **Primary Matcher:** LoFTR (detector-free, dense) + MAGSAC++ verification
+- **Ablation Matcher:** LightGlue (sparse, for speed/quality trade-off comparison)
 - **Global Similarity:** DINOv3 CLS token cosine for retrieval & loop closure
-- **DINO Patches:** Attention‑guided Top‑K sampling (e.g., 800) for optional dense-ish assists
-- **Graph Backend:** Weighted pose graph (PGO + IRLS), Sim(3) component alignment
-- **Context-Aware BA:** Combined local score + CLS + attention + tri‑angle weighting
-- **Compatibility:** Drop‑in with traditional SfM; local modules are swappable
+- **DINO Patches:** Attention‑guided Top‑K sampling (e.g., 800) for pre-filtering and pose-graph fallback
+- **Graph Operations:** Rotation/translation averaging with DINO-weighted edges, Sim(3) component alignment
+- **Context-Aware BA:** PyTorch-based custom BA with combined local score + CLS + attention + tri‑angle weighting
+- **Modularity:** DINO weighting layer is matcher-agnostic and can be applied to any feature-based pipeline
 
 ---
 
@@ -248,47 +296,60 @@ All image sets are undistorted and resized so the longer edge ≤ 1600 px unless
 ### Experimental Setup
 
 - **Hardware.** 1× RTX 4080 16 GB GPU + 1× 16-core CPU (Ryzen 9 7950X equivalent), 64 GB RAM; CLS extraction batched to fit 4080 memory budget.
-- **Software.** PyTorch 2.1 + FAISS GPU; COLMAP 3.9 for baselines; same pose-graph/BA backend (Ceres) across methods.
+- **Software.** PyTorch 2.1 + FAISS GPU; GLOMAP for reconstruction backend; COLMAP 3.9 for baselines only; custom PyTorch BA implementation.
 - **Hyper-parameters.** CLS Top-K1 = 60, final Top-K = 20, LoFTR resolution {448, 832} px; MAGSAC++ thresholds tuned on ETH3D train.
 
 ### Protocol
 
 1. **Retrieval Ablation.** Compare NetVLAD, DINO CLS, and hybrid (CLS+NetVLAD concat) on pair-retrieval precision/recall.
-2. **Matching Ablation.** Evaluate LoFTR-only vs. LoFTR+attention masks vs. LoFTR+DINO fallback on ETH3D validation.
-3. **Weighting Ablation.** Run BA with (a) uniform weights, (b) only geometric terms, (c) full DINO-aware weighting.
-4. **Loop Closure Stress Test.** Inject long-range loops (ScanNet hallway, MegaDepth skyline) and measure Sim(3) drift before/after closure.
-5. **Runtime Study.** Report per-stage runtime, GPU memory for each dataset; include breakdown of CLS extraction, FAISS queries, LoFTR, BA.
+2. **Matcher Ablation.** Compare LoFTR (dense, primary) vs. LightGlue (sparse) to demonstrate:
+   - DINO weighting benefits are larger with dense matchers (LoFTR)
+   - Framework is matcher-agnostic but shows synergy with detector-free approaches
+   - Speed/quality trade-offs in textureless regions
+3. **DINO Integration Ablation.** Evaluate on LoFTR: (a) vanilla LoFTR, (b) +attention-guided masks, (c) +DINO fallback, (d) full pipeline.
+4. **Weighting Ablation.** Run BA with (a) uniform weights, (b) only geometric terms (C_ij + T_ij), (c) full DINO-aware weighting (all terms in Eq. Section 5).
+5. **Loop Closure Stress Test.** Inject long-range loops (ScanNet hallway, MegaDepth skyline) and measure Sim(3) drift before/after closure.
+6. **Runtime Study.** Report per-stage runtime, GPU memory for each dataset; include breakdown of CLS extraction, FAISS queries, LoFTR, GLOMAP, BA.
 
 ### Baselines
 
-| Method                | Descriptor / Matcher          | Loop Closure | Scene Merge | Context-Aware BA |
-| --------------------- | ----------------------------- | ------------ | ----------- | ---------------- |
-| COLMAP                | SIFT + NN                     | ✗            | ✗           | ✗                |
-| HLOC                  | NetVLAD + SuperPoint/NN       | ✓            | partial     | ✗                |
-| LightGlue             | SuperPoint/ALIKED + LightGlue | ✓            | partial     | ✗                |
-| **LoFTR (Ours base)** | LoFTR (detector-free)         | ✓            | ✓           | ✓                |
-| VGGSfM                | ViT Global                    | ✓            | partial     | ✗                |
-| **Ours (DINOv3‑SfM)** | DINOv3 (CLS+patch) + LoFTR    | ✓            | ✓           | ✓                |
+| Method                | Descriptor / Matcher          | SfM Type    | Loop Closure | Scene Merge | Context-Aware BA |
+| --------------------- | ----------------------------- | ----------- | ------------ | ----------- | ---------------- |
+| COLMAP                | SIFT + NN                     | Incremental | ✗            | ✗           | ✗                |
+| HLOC                  | NetVLAD + SuperPoint/NN       | Incremental | ✓            | partial     | ✗                |
+| GLOMAP                | NetVLAD + SuperPoint          | Global      | ✓            | ✓           | ✗                |
+| LightGlue             | SuperPoint/ALIKED + LightGlue | Incremental | ✓            | partial     | ✗                |
+| VGGSfM                | ViT Global                    | Global      | ✓            | partial     | ✗                |
+| **Ours (DINOv3‑SfM)** | DINOv3 (CLS+patch) + LoFTR    | Global      | ✓            | ✓           | ✓                |
 
 ### Timeline / Deliverables
 
-- **Month 1.** Reproduce COLMAP, HLOC, LoFTR baselines; validate retrieval ablation on ETH3D train scenes.
-- **Month 2.** Integrate DINO-guided LoFTR and weighting; run full pipeline on ETH3D/ScanNet validation, iterate on hyper-parameters.
-- **Month 3.** Execute cross-dataset evaluation (MegaDepth, Tanks & Temples); finalize runtime study and qualitative visualizations.
+- **Month 1.** Reproduce COLMAP, HLOC, GLOMAP baselines; implement DINO CLS retrieval and validate on ETH3D train scenes.
+- **Month 2.** Integrate GLOMAP with DINO-weighted edges; implement custom PyTorch BA with attention weighting; run full pipeline on ETH3D/ScanNet validation.
+- **Month 3.** Execute cross-dataset evaluation (MegaDepth, Tanks & Temples); run all ablations; finalize runtime study and qualitative visualizations.
 
 ---
 
 ## 9. Key Results (Expected)
 
-| Metric            | COLMAP | HLOC | Ours (DINOv3-SfM) |
-| ----------------- | ------ | ---- | ----------------- |
-| Registered Images | 68%    | 81%  | **95%**           |
-| Mean ATE ↓        | 0.39   | 0.31 | **0.21**          |
-| Mean RPE ↓        | 0.25   | 0.22 | **0.15**          |
-| Split Count ↓     | 3.1    | 1.7  | **1.0**           |
-| Runtime (rel.)    | 1.0x   | 1.6x | 2.2x              |
+| Metric            | COLMAP | HLOC | GLOMAP | Ours (DINOv3-SfM) |
+| ----------------- | ------ | ---- | ------ | ----------------- |
+| Registered Images | 68%    | 81%  | 89%    | **93%**           |
+| Mean ATE ↓        | 0.39   | 0.31 | 0.26   | **0.19**          |
+| Mean RPE ↓        | 0.25   | 0.22 | 0.18   | **0.14**          |
+| Split Count ↓     | 3.1    | 1.7  | 1.2    | **1.0**           |
+| Runtime (rel.)    | 1.0x   | 1.6x | 1.4x   | 2.1x              |
 
-_All reported numbers for **Ours** use LoFTR (detector-free) as primary matcher with MAGSAC++ verification; DINOv3 provides retrieval and weighting._
+_Numbers for **Ours** use LoFTR (detector-free) as primary matcher with MAGSAC++ verification on GLOMAP backend; DINOv3 provides CLS retrieval, edge weighting, and BA attention weights._
+
+**Matcher Comparison (Ours only):**
+
+| Matcher   | Registered | ATE ↓ | Textureless ATE ↓ | Runtime (rel.) |
+| --------- | ---------- | ----- | ----------------- | -------------- |
+| LightGlue | 90%        | 0.22  | 0.35              | 1.5x           |
+| LoFTR     | **93%**    | **0.19** | **0.24**       | 2.1x           |
+
+_Shows DINO weighting benefits are larger with dense matchers in challenging regions._
 
 ---
 
@@ -317,10 +378,10 @@ _All reported numbers for **Ours** use LoFTR (detector-free) as primary matcher 
 
 **Core Contributions:**
 
-1. Keypoint-free feature extraction using DINOv3 patch embeddings.
-2. Attention-guided confidence weighting in BA.
-3. Graph-aware optimization for stable scene merging.
+1. **Keypoint-free dense matching** using DINOv3 patch embeddings + LoFTR, replacing traditional sparse keypoint extraction.
+2. **Attention-guided confidence weighting** in bundle adjustment, leveraging DINO's learned semantic priors.
+3. **Graph-aware global optimization** via GLOMAP with DINO-enhanced edge weights, ensuring scale consistency and robust component merging.
 
-This pipeline provides both a _conceptual_ and _practical_ leap toward unified Transformer-based visual reconstruction.
+This pipeline provides both a _conceptual_ and _practical_ leap toward unified Transformer-based visual reconstruction. By building on GLOMAP's global SfM framework and enhancing it with DINOv3's multi-scale semantic understanding, we address fundamental limitations of incremental approaches (scale drift, fragmented reconstructions) while maintaining full geometric interpretability.
 
-Additionally, by replacing the traditional vocabulary-tree retrieval with **DINO CLS–based FAISS Top‑K selection**, the pipeline achieves detector-free scalability and robust pair selection compatible with LoFTR.
+The system is **matcher-agnostic** in principle, but achieves strongest performance with dense detector-free matchers (LoFTR) that complement DINO's continuous patch representation. The DINO CLS–based FAISS retrieval replaces traditional vocabulary trees, enabling efficient pair selection at scale.

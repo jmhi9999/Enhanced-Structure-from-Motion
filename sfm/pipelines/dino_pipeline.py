@@ -1,4 +1,13 @@
-"""DINO CLS-based retrieval and matching pipeline integrated with LoFTR."""
+"""DINO CLS-based retrieval and matching pipeline integrated with LoFTR.
+
+This module implements the feature extraction and matching stages of the DINOv3-SfM pipeline:
+- CLS token–based image retrieval (FAISS)
+- LoFTR dense matching with attention guidance
+- DINO patch fallback for challenging cases
+- Pair weight computation for downstream global SfM (GLOMAP) and context-aware BA
+
+The output is designed to integrate with GLOMAP for global reconstruction.
+"""
 
 from __future__ import annotations
 
@@ -127,6 +136,17 @@ def run_dino_pipeline(
 
         match_source = "loftr"
         if inlier_mask is None or inlier_mask.sum() < min_inliers:
+            # DINO Fallback: When LoFTR fails to produce sufficient inliers
+            #
+            # Note: DINO patch matches have ±7px spatial uncertainty due to 14×14 patch size.
+            # While not ideal for precise triangulation, MAGSAC++ verification filters outliers
+            # and ensures geometric consistency. These matches serve two purposes:
+            # 1. Enable pose estimation for view graph construction (GLOMAP)
+            # 2. Provide coarse correspondences when dense matching fails (textureless regions)
+            #
+            # In production, these correspondences can be:
+            # - Used for pose-only estimation (view graph edges) without BA residuals
+            # - Or weighted lower in BA via attention scores (A_ij term in Section 5)
             dino_match = match_dino_patches(
                 feat_a,
                 feat_b,

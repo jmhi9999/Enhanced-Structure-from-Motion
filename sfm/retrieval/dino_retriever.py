@@ -45,7 +45,13 @@ class DINOCLSRetriever:
     def build(self, features: Dict[str, Dict[str, np.ndarray]]) -> None:
         """Build FAISS index from CLS embeddings."""
         self.paths = list(features.keys())
-        cls_vectors = [features[path]["dino_cls"] for path in self.paths]
+        cls_vectors = []
+        for path in self.paths:
+            cls_vec = features[path]["dino_cls"]
+            # Ensure 1D vector for FAISS (flatten if needed)
+            if cls_vec.ndim > 1:
+                cls_vec = cls_vec.flatten()
+            cls_vectors.append(cls_vec)
         self.cls_matrix = np.stack(cls_vectors).astype(np.float32)
 
         if _FAISS_AVAILABLE:
