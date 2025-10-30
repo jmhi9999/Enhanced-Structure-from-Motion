@@ -20,7 +20,7 @@ from PIL import Image
 
 from sfm.core.feature_extractor import FeatureExtractorFactory
 from sfm.core.feature_matcher import EnhancedLightGlueMatcher
-from sfm.core.geometric_verification import GeometricVerification, RANSACMethod
+from sfm.core.algebraic_consensus import AlgebraicConsensus, convert_matches_to_correspondences
 from sfm.core.gpu_vocabulary_tree import GPUVocabularyTree
 from sfm.utils.io_utils import (
     save_colmap_format,
@@ -48,7 +48,7 @@ def parse_args():
     parser.add_argument(
         "--feature_extractor",
         type=str,
-        default="superpoint",
+        default="aliked",
         choices=["superpoint", "aliked", "disk"],
         help="Feature extractor to use",
     )
@@ -69,7 +69,7 @@ def parse_args():
     parser.add_argument(
         "--use_brute_force",
         action="store_true",
-        default=True,
+        default=False,
         help="Use GPU brute force matching (default and recommended)",
     )
     parser.add_argument(
@@ -88,6 +88,55 @@ def parse_args():
         type=int,
         default=None,
         help="Maximum total pairs for brute force matching",
+    )
+    parser.add_argument(
+        "--consensus_mode",
+        type=str,
+        default="deterministic",
+        choices=["deterministic", "ransac"],
+        help="Algebraic consensus mode for geometric verification",
+    )
+    parser.add_argument(
+        "--consensus_tau_deg",
+        type=float,
+        default=17.0,
+        help="Orientation threshold in degrees for consensus filtering",
+    )
+    parser.add_argument(
+        "--consensus_inlier_threshold",
+        type=float,
+        default=5.0,
+        help="Inlier threshold in pixels for consensus verification",
+    )
+    parser.add_argument(
+        "--consensus_min_inlier_ratio",
+        type=float,
+        default=0.2,
+        help="Minimum inlier ratio required to keep a verified pair",
+    )
+    parser.add_argument(
+        "--consensus_max_combos",
+        type=int,
+        default=500,
+        help="Maximal minimal-set combinations in deterministic mode (<=0 for unlimited)",
+    )
+    parser.add_argument(
+        "--consensus_min_correspondences",
+        type=int,
+        default=10,
+        help="Minimum correspondences required before running consensus verification",
+    )
+    parser.add_argument(
+        "--consensus_n_trials",
+        type=int,
+        default=100,
+        help="Maximum RANSAC trials when consensus mode is 'ransac'",
+    )
+    parser.add_argument(
+        "--consensus_confidence",
+        type=float,
+        default=0.99,
+        help="RANSAC confidence level for consensus verification",
     )
 
     # Device and performance
@@ -198,6 +247,14 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             "device": args.device,
             "num_workers": args.num_workers,
             "batch_size": args.batch_size,
+            "consensus_mode": args.consensus_mode,
+            "consensus_tau_deg": args.consensus_tau_deg,
+            "consensus_inlier_threshold": args.consensus_inlier_threshold,
+            "consensus_min_inlier_ratio": args.consensus_min_inlier_ratio,
+            "consensus_max_combos": args.consensus_max_combos,
+            "consensus_min_correspondences": args.consensus_min_correspondences,
+            "consensus_n_trials": args.consensus_n_trials,
+            "consensus_confidence": args.consensus_confidence,
         }
     else:
         # Direct function call mode
@@ -216,6 +273,31 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info(f"Feature extractor: {kwargs.get('feature_extractor', 'superpoint')}")
     logger.info(f"GPU brute force matching: {kwargs.get('use_brute_force', True)}")
     logger.info(f"High quality mode: {kwargs.get('high_quality', False)}")
+
+    consensus_defaults = {
+        "consensus_mode": "deterministic",
+        "consensus_tau_deg": 17.0,
+        "consensus_inlier_threshold": 5.0,
+        "consensus_min_inlier_ratio": 0.2,
+        "consensus_max_combos": 500,
+        "consensus_min_correspondences": 10,
+        "consensus_n_trials": 100,
+        "consensus_confidence": 0.99,
+        "consensus_use_closed_form": True,
+        "consensus_use_orientation_filter": True,
+        "consensus_min_inliers": 3,
+    }
+    for key, value in consensus_defaults.items():
+        kwargs.setdefault(key, value)
+    kwargs["consensus_mode"] = str(kwargs.get("consensus_mode", "deterministic")).lower()
+
+    logger.info(
+        "Algebraic consensus mode: %s (tau=%.1f°, inlier_threshold=%.2fpx, min_ratio=%.2f)",
+        kwargs["consensus_mode"],
+        kwargs.get("consensus_tau_deg", 17.0),
+        kwargs.get("consensus_inlier_threshold", 5.0),
+        kwargs.get("consensus_min_inlier_ratio", 0.2),
+    )
 
     # Performance tracking
     start_time = time.time()
@@ -534,6 +616,208 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             del formatted_features
 
         cleanup_gpu_memory(device, "feature matching")
+
+    # Stage 4.5: Geometric verification with Algebraic Consensus
+    logger.info("Stage 4.5: Geometric verification (Algebraic Consensus)...")
+    stage_start = time.time()
+
+    if not matches:
+        logger.warning("No matches available for geometric verification; skipping stage.")
+        stage_times["geometric_verification"] = 0.0
+        logger.info("Geometric verification skipped (0 pairs to verify).")
+    else:
+        consensus_mode = kwargs.get("consensus_mode", "hybrid")
+        tau_deg = kwargs.get("consensus_tau_deg", 17.0)
+        inlier_threshold = kwargs.get("consensus_inlier_threshold", 5.0)
+        min_ratio = kwargs.get("consensus_min_inlier_ratio", 0.1)
+        max_combos_raw = kwargs.get("consensus_max_combos", 150)
+        max_combos = None if max_combos_raw is None or max_combos_raw <= 0 else max_combos_raw
+        min_correspondences = kwargs.get("consensus_min_correspondences", 10)
+        use_orientation_filter = kwargs.get("consensus_use_orientation_filter", True)
+        use_closed_form = kwargs.get("consensus_use_closed_form", True)
+        n_trials = kwargs.get("consensus_n_trials", 100)
+        confidence = kwargs.get("consensus_confidence", 0.99)
+        min_inliers = kwargs.get("consensus_min_inliers", 3)
+        hybrid_min_ratio = kwargs.get("consensus_hybrid_min_ratio", 0.1)
+
+        logger.info(
+            "Consensus config → mode=%s, tau=%.1f°, inlier_threshold=%.2fpx, "
+            "min_ratio=%.2f, min_corr=%d, max_combos=%s, hybrid_fallback_ratio=%.2f",
+            consensus_mode,
+            tau_deg,
+            inlier_threshold,
+            min_ratio,
+            min_correspondences,
+            "unlimited" if max_combos is None else str(max_combos),
+            hybrid_min_ratio,
+        )
+
+        verifier = AlgebraicConsensus(
+            orientation_tau=np.radians(tau_deg),
+            use_orientation_filter=use_orientation_filter,
+            mode=consensus_mode,
+            n_trials=n_trials,
+            inlier_threshold=inlier_threshold,
+            confidence=confidence,
+            use_closed_form=use_closed_form,
+            max_deterministic_combinations=max_combos,
+            min_inliers=min_inliers,
+            hybrid_min_ratio=hybrid_min_ratio,
+        )
+
+        def _build_kpt_dict(feat: Dict[str, Any]) -> Dict[str, Any]:
+            data: Dict[str, Any] = {"keypoints": feat["keypoints"]}
+            if "scores" in feat and feat["scores"] is not None:
+                data["scores"] = feat["scores"]
+            if "orientations" in feat and feat["orientations"] is not None:
+                data["orientations"] = feat["orientations"]
+            return data
+
+        original_matches = matches
+        total_pairs = len(original_matches)
+        logger.info("Verifying %d matched pairs...", total_pairs)
+
+        verified_matches: Dict[Any, Any] = {}
+        verification_stats = {
+            "total_pairs": total_pairs,
+            "verified_pairs": 0,
+            "avg_inlier_ratio": 0.0,
+            "avg_runtime_ms": 0.0,
+            "avg_orientation_std_deg": 0.0,
+            "orientation_pairs": 0,
+            "fallback_pairs": 0,
+        }
+
+        for pair, match_result in tqdm(original_matches.items(), desc="Verifying matches"):
+            img1, img2 = pair
+            feat1 = features[img1]
+            feat2 = features[img2]
+
+            matches0 = match_result["matches0"]
+            valid_src_indices = np.nonzero(matches0 >= 0)[0]
+            if valid_src_indices.size < min_correspondences:
+                continue
+
+            src_keypoints = feat1["keypoints"]
+            dst_keypoints = feat2["keypoints"]
+            src_len = src_keypoints.shape[0]
+            dst_len = dst_keypoints.shape[0]
+
+            hits = []
+            for src_idx in valid_src_indices:
+                if src_idx >= src_len:
+                    continue
+                dst_idx = matches0[src_idx]
+                if 0 <= dst_idx < dst_len:
+                    hits.append((int(src_idx), int(dst_idx)))
+
+            if len(hits) < min_correspondences:
+                continue
+
+            correspondences = convert_matches_to_correspondences(
+                hits,
+                _build_kpt_dict(feat1),
+                _build_kpt_dict(feat2),
+            )
+
+            if len(correspondences) < min_correspondences:
+                continue
+
+            result = verifier.verify_pair(
+                correspondences,
+                image_shape=feat1.get("image_shape"),
+            )
+
+            if (
+                result.inlier_ratio >= min_ratio
+                and result.n_inliers >= min_correspondences
+            ):
+                verified_matches[pair] = match_result
+                verification_stats["verified_pairs"] += 1
+                verification_stats["avg_inlier_ratio"] += result.inlier_ratio
+                verification_stats["avg_runtime_ms"] += result.runtime * 1000.0
+                if result.orientation_stats and result.orientation_stats.n_samples > 0:
+                    verification_stats["avg_orientation_std_deg"] += np.degrees(
+                        result.orientation_stats.std
+                    )
+                verification_stats["orientation_pairs"] += 1
+
+                if result.method.startswith("hybrid"):
+                    verification_stats["fallback_pairs"] += 1
+            else:
+                logger.debug(
+                    "Rejected pair %s ↔ %s (ratio=%.3f, inliers=%d, certificate=%s)",
+                    img1,
+                    img2,
+                    result.inlier_ratio,
+                    result.n_inliers,
+                    result.certificate,
+                )
+
+        if verification_stats["verified_pairs"] > 0:
+            verification_stats["avg_inlier_ratio"] /= verification_stats["verified_pairs"]
+            verification_stats["avg_runtime_ms"] /= verification_stats["verified_pairs"]
+        if verification_stats["orientation_pairs"] > 0:
+            verification_stats["avg_orientation_std_deg"] /= verification_stats["orientation_pairs"]
+
+        kept = verification_stats["verified_pairs"]
+        total = verification_stats["total_pairs"]
+        logger.info("Verified %d/%d pairs (%.1f%%)", kept, total, (kept / total * 100.0) if total else 0.0)
+        logger.info(
+            "Average inlier ratio (kept): %.3f (threshold %.2f)",
+            verification_stats["avg_inlier_ratio"],
+            min_ratio,
+        )
+        logger.info(
+            "Average verification time (kept): %.2f ms per pair",
+            verification_stats["avg_runtime_ms"],
+        )
+        if verification_stats["verified_pairs"] > 0 and verification_stats["fallback_pairs"] > 0:
+            logger.info(
+                "Hybrid fallback triggered for %d kept pairs (%.1f%%)",
+                verification_stats["fallback_pairs"],
+                verification_stats["fallback_pairs"] / verification_stats["verified_pairs"] * 100.0,
+            )
+        if verification_stats["orientation_pairs"] > 0:
+            logger.info(
+                "Average orientation std among kept pairs: %.2f°",
+                verification_stats["avg_orientation_std_deg"],
+            )
+
+        verifier_stats = verifier.get_statistics()
+        if consensus_mode in {"deterministic", "hybrid"}:
+            total_combos = verifier_stats.get("n_deterministic_combos", 0)
+            call_count = verifier_stats.get("n_calls", 0)
+            avg_combos = (total_combos / call_count) if call_count else 0.0
+            logger.info(
+                "Deterministic consensus combos tried: total=%d, avg=%.1f per call",
+                total_combos,
+                avg_combos,
+            )
+        if consensus_mode in {"hybrid", "ransac"}:
+            ransac_calls = verifier_stats.get("n_ransac_calls", 0)
+            if ransac_calls:
+                logger.info("RANSAC verification calls: %d", ransac_calls)
+        if consensus_mode == "hybrid":
+            fallback_calls = verifier_stats.get("n_hybrid_fallbacks", 0)
+            if fallback_calls:
+                logger.info("Hybrid fallback triggered %d times", fallback_calls)
+
+        if kept == 0:
+            logger.warning(
+                "No pairs passed algebraic consensus. Falling back to unfiltered matches."
+            )
+            matches = original_matches
+        else:
+            matches = verified_matches
+
+        stage_times["geometric_verification"] = time.time() - stage_start
+        logger.info(
+            "Geometric verification completed in %.2fs",
+            stage_times["geometric_verification"],
+        )
+
+    cleanup_gpu_memory(device, "geometric verification")
 
     # Stage 5: COLMAP-based SfM reconstruction using binary (avoid pycolmap CUDA issues)
     logger.info("Stage 5: COLMAP-based SfM reconstruction using binary...")

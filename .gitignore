@@ -8,3 +8,5 @@ CLAUDE.md
 .claude/settings.local.json
 .claude/
 .claude/**
+/images
+/output

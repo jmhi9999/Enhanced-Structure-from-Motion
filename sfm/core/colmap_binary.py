@@ -269,12 +269,11 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -
         "--image_path", str(image_dir),
         "--output_path", str(sparse_path),
         "--Mapper.num_threads", "16",
-        # CPU 최적화 옵션들 (PBA 미지원 버전)
         "--Mapper.ba_local_max_num_iterations", "20",  # 25->20 (안전한 가속)
         "--Mapper.ba_global_max_num_iterations", "35",  # 50->35 (안전한 가속)
         "--Mapper.max_num_models", "1",  # 단일 모델
         "--Mapper.max_model_overlap", "15",  # 20->15 (적당한 가속)
-        "--Mapper.min_num_matches", "8",   # Reduced from 15 to 8
+        "--Mapper.min_num_matches", "10",   # Reduced from 15 to 8
         "--Mapper.ba_global_images_ratio", "1.2",  # 메모리 효율성
         "--Mapper.ba_global_points_ratio", "1.2"  # 메모리 효율성
     ]
