@@ -2,7 +2,7 @@
 
 from .base import BasePairSelector, PairSelectorConfig
 from .exhaustive import ExhaustivePairSelector
-from .mpa import MPAPairSelector
+from .sara import SARAPairSelector
 from .vocab_tree import VocabTreePairSelector
 
 __all__ = [
@@ -17,7 +17,7 @@ class PairSelectorFactory:
 
     _selectors = {
         "exhaustive": ExhaustivePairSelector,
-        "mpa": MPAPairSelector,
+        "SARA": SARAPairSelector,
         "vocab_tree": VocabTreePairSelector,
     }
 

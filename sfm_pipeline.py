@@ -76,148 +76,148 @@ def parse_args():
         help="Maximum total pairs for brute force matching",
     )
     parser.add_argument(
-        "--mpa_device",
+        "--SARA_device",
         type=str,
         default="cuda",
-        help="Device for MPA DINO embedding computation",
+        help="Device for SARA DINO embedding computation",
     )
     parser.add_argument(
-        "--mpa_knn_k",
+        "--SARA_knn_k",
         type=int,
         default=30,
-        help="Number of nearest neighbours per image for MPA candidate graph",
+        help="Number of nearest neighbours per image for SARA candidate graph",
     )
     parser.add_argument(
-        "--mpa_top_t_mutual",
+        "--SARA_top_t_mutual",
         type=int,
         default=128,
-        help="Mutual nearest descriptor count per pair for MPA fast pre-matching",
+        help="Mutual nearest descriptor count per pair for SARA fast pre-matching",
     )
     parser.add_argument(
-        "--mpa_min_nn_for_ransac",
+        "--SARA_min_nn_for_ransac",
         type=int,
         default=32,
-        help="Minimum mutual matches to run MPA mini-RANSAC",
+        help="Minimum mutual matches to run SARA mini-RANSAC",
     )
     parser.add_argument(
-        "--mpa_loop_budget_per_node",
+        "--SARA_loop_budget_per_node",
         type=float,
         default=0.5,
-        help="Additional loop edges per node budget for MPA augmentation",
+        help="Additional loop edges per node budget for SARA augmentation",
     )
     parser.add_argument(
-        "--mpa_tau_overlap",
+        "--SARA_tau_overlap",
         type=float,
         default=0.10,
-        help="Minimum overlap ratio threshold for MPA edges",
+        help="Minimum overlap ratio threshold for SARA edges",
     )
     parser.add_argument(
-        "--mpa_tau_parallax",
+        "--SARA_tau_parallax",
         type=float,
         default=0.05,
-        help="Minimum parallax threshold for MPA edges",
+        help="Minimum parallax threshold for SARA edges",
     )
     parser.add_argument(
-        "--mpa_alpha",
+        "--SARA_alpha",
         type=float,
         default=1.0,
-        help="Overlap exponent for MPA edge scoring",
+        help="Overlap exponent for SARA edge scoring",
     )
     parser.add_argument(
-        "--mpa_beta",
+        "--SARA_beta",
         type=float,
         default=1.0,
-        help="Parallax exponent for MPA edge scoring",
+        help="Parallax exponent for SARA edge scoring",
     )
     parser.add_argument(
-        "--mpa_degree_cap",
+        "--SARA_degree_cap",
         type=int,
         default=6,
-        help="Optional degree cap enforced during MPA leaf augmentation",
+        help="Optional degree cap enforced during SARA leaf augmentation",
     )
     parser.add_argument(
-        "--mpa_disable_intrinsics",
+        "--SARA_disable_intrinsics",
         action="store_true",
-        help="Disable intrinsics usage inside MPA parallax proxy",
+        help="Disable intrinsics usage inside SARA parallax proxy",
     )
     parser.add_argument(
-        "--mpa_fx",
+        "--SARA_fx",
         type=float,
         default=None,
-        help="Fallback fx value if intrinsics are supplied manually to MPA",
+        help="Fallback fx value if intrinsics are supplied manually to SARA",
     )
     parser.add_argument(
-        "--mpa_fy",
+        "--SARA_fy",
         type=float,
         default=None,
-        help="Fallback fy value if intrinsics are supplied manually to MPA",
+        help="Fallback fy value if intrinsics are supplied manually to SARA",
     )
-    # MPA Advanced Augmentation
+    # SARA Advanced Augmentation
     parser.add_argument(
-        "--mpa_enable_multi_scale_loops",
+        "--SARA_enable_multi_scale_loops",
         action="store_true",
         default=True,
-        help="Enable multi-scale loop augmentation for MPA",
+        help="Enable multi-scale loop augmentation for SARA",
     )
     parser.add_argument(
-        "--mpa_small_loop_ratio",
+        "--SARA_small_loop_ratio",
         type=float,
         default=0.5,
         help="Fraction of loop budget for small loops (path length 2)",
     )
     parser.add_argument(
-        "--mpa_medium_loop_ratio",
+        "--SARA_medium_loop_ratio",
         type=float,
         default=0.3,
         help="Fraction of loop budget for medium loops (path length 3-4)",
     )
     parser.add_argument(
-        "--mpa_large_loop_ratio",
+        "--SARA_large_loop_ratio",
         type=float,
         default=0.2,
         help="Fraction of loop budget for large loops (path length 5+)",
     )
     parser.add_argument(
-        "--mpa_enable_long_baseline_anchors",
+        "--SARA_enable_long_baseline_anchors",
         action="store_true",
         default=True,
         help="Enable long-baseline anchor edges for scale stability",
     )
     parser.add_argument(
-        "--mpa_anchor_count",
+        "--SARA_anchor_count",
         type=int,
         default=10,
         help="Number of long-baseline anchor edges to add",
     )
     parser.add_argument(
-        "--mpa_anchor_percentile",
+        "--SARA_anchor_percentile",
         type=float,
         default=0.95,
         help="Percentile threshold for baseline length (top 5%)",
     )
     parser.add_argument(
-        "--mpa_enable_weak_view_reinforcement",
+        "--SARA_enable_weak_view_reinforcement",
         action="store_true",
         default=True,
         help="Enable weak-view reinforcement for robust initialization",
     )
     parser.add_argument(
-        "--mpa_weak_view_percentile",
+        "--SARA_weak_view_percentile",
         type=float,
         default=0.20,
         help="Percentile threshold for weak views (bottom 20%)",
     )
     parser.add_argument(
-        "--mpa_weak_view_extra_edges",
+        "--SARA_weak_view_extra_edges",
         type=int,
         default=2,
         help="Number of extra edges to add per weak view",
     )
     parser.add_argument(
-        "--use_mpa_matches",
+        "--use_SARA_matches",
         action="store_true",
         default=False,
-        help="Use matches computed by MPA (mutual NN + RANSAC) instead of LightGlue matching",
+        help="Use matches computed by SARA (mutual NN + RANSAC) instead of LightGlue matching",
     )
     # Device and performance
     parser.add_argument(
@@ -302,14 +302,14 @@ def setup_logging(output_dir: str):
     )
 
 
-def _export_features_for_mpa(features: Dict[str, Any], mpa_root: Path) -> Dict[str, Dict[str, np.ndarray]]:
-    """Write per-image ALIKED npz files expected by the MPA pipeline."""
+def _export_features_for_SARA(features: Dict[str, Any], SARA_root: Path) -> Dict[str, Dict[str, np.ndarray]]:
+    """Write per-image ALIKED npz files expected by the SARA pipeline."""
     try:
-        from mpa.io_utils import ensure_dir, normalise_feature_dict
+        from SARA.io_utils import ensure_dir, normalise_feature_dict
     except ImportError as exc:
-        raise ImportError("MPA modules are required but not installed.") from exc
+        raise ImportError("SARA modules are required but not installed.") from exc
 
-    features_dir = ensure_dir(mpa_root / "features")
+    features_dir = ensure_dir(SARA_root / "features")
     converted: Dict[str, Dict[str, Any]] = {}
     for key, payload in features.items():
         converted_payload: Dict[str, Any] = {}
@@ -336,59 +336,59 @@ def _export_features_for_mpa(features: Dict[str, Any], mpa_root: Path) -> Dict[s
     return normalised
 
 
-def _select_pairs_with_mpa(
+def _select_pairs_with_SARA(
     input_dir: str,
     output_path: Path,
     image_paths: List[str],
     features: Dict[str, Any],
     kwargs: Dict[str, Any],
 ) -> List[tuple[str, str]]:
-    """Run the MPA pair selection pipeline and return image path pairs."""
+    """Run the SARA pair selection pipeline and return image path pairs."""
     try:
-        from mpa.config import MPAConfig
-        from mpa.cli import run_mpa
+        from SARA.config import SARAConfig
+        from SARA.cli import run_SARA
     except ImportError as exc:
-        raise ImportError("MPA modules are required but not installed.") from exc
+        raise ImportError("SARA modules are required but not installed.") from exc
 
-    mpa_root = output_path / "mpa"
-    mpa_root.mkdir(parents=True, exist_ok=True)
-    _export_features_for_mpa(features, mpa_root)
+    SARA_root = output_path / "SARA"
+    SARA_root.mkdir(parents=True, exist_ok=True)
+    _export_features_for_SARA(features, SARA_root)
 
-    cfg = MPAConfig(
+    cfg = SARAConfig(
         img_dir=input_dir,
-        out_dir=str(mpa_root),
-        knn_k=kwargs.get("mpa_knn_k", 30),
-        top_t_mutual=kwargs.get("mpa_top_t_mutual", 128),
-        min_nn_for_ransac=kwargs.get("mpa_min_nn_for_ransac", 32),
-        ransac_iters=kwargs.get("mpa_ransac_iters", 15),
-        ransac_conf=kwargs.get("mpa_ransac_conf", 0.999),
-        tau_overlap=kwargs.get("mpa_tau_overlap", 0.10),
-        tau_parallax=kwargs.get("mpa_tau_parallax", 0.05),
-        alpha=kwargs.get("mpa_alpha", 1.0),
-        beta=kwargs.get("mpa_beta", 1.0),
-        loop_budget_per_node=kwargs.get("mpa_loop_budget_per_node", 0.5),
-        deg_cap=kwargs.get("mpa_degree_cap", 6),
+        out_dir=str(SARA_root),
+        knn_k=kwargs.get("SARA_knn_k", 30),
+        top_t_mutual=kwargs.get("SARA_top_t_mutual", 128),
+        min_nn_for_ransac=kwargs.get("SARA_min_nn_for_ransac", 32),
+        ransac_iters=kwargs.get("SARA_ransac_iters", 15),
+        ransac_conf=kwargs.get("SARA_ransac_conf", 0.999),
+        tau_overlap=kwargs.get("SARA_tau_overlap", 0.10),
+        tau_parallax=kwargs.get("SARA_tau_parallax", 0.05),
+        alpha=kwargs.get("SARA_alpha", 1.0),
+        beta=kwargs.get("SARA_beta", 1.0),
+        loop_budget_per_node=kwargs.get("SARA_loop_budget_per_node", 0.5),
+        deg_cap=kwargs.get("SARA_degree_cap", 6),
         # Advanced augmentation strategies
-        enable_multi_scale_loops=kwargs.get("mpa_enable_multi_scale_loops", True),
-        small_loop_ratio=kwargs.get("mpa_small_loop_ratio", 0.5),
-        medium_loop_ratio=kwargs.get("mpa_medium_loop_ratio", 0.3),
-        large_loop_ratio=kwargs.get("mpa_large_loop_ratio", 0.2),
-        enable_long_baseline_anchors=kwargs.get("mpa_enable_long_baseline_anchors", True),
-        anchor_count=kwargs.get("mpa_anchor_count", 10),
-        anchor_percentile=kwargs.get("mpa_anchor_percentile", 0.95),
-        enable_weak_view_reinforcement=kwargs.get("mpa_enable_weak_view_reinforcement", True),
-        weak_view_percentile=kwargs.get("mpa_weak_view_percentile", 0.20),
-        weak_view_extra_edges=kwargs.get("mpa_weak_view_extra_edges", 2),
+        enable_multi_scale_loops=kwargs.get("SARA_enable_multi_scale_loops", True),
+        small_loop_ratio=kwargs.get("SARA_small_loop_ratio", 0.5),
+        medium_loop_ratio=kwargs.get("SARA_medium_loop_ratio", 0.3),
+        large_loop_ratio=kwargs.get("SARA_large_loop_ratio", 0.2),
+        enable_long_baseline_anchors=kwargs.get("SARA_enable_long_baseline_anchors", True),
+        anchor_count=kwargs.get("SARA_anchor_count", 10),
+        anchor_percentile=kwargs.get("SARA_anchor_percentile", 0.95),
+        enable_weak_view_reinforcement=kwargs.get("SARA_enable_weak_view_reinforcement", True),
+        weak_view_percentile=kwargs.get("SARA_weak_view_percentile", 0.20),
+        weak_view_extra_edges=kwargs.get("SARA_weak_view_extra_edges", 2),
         # Standard parameters
-        use_intrinsics=not kwargs.get("mpa_disable_intrinsics", False),
-        fx=kwargs.get("mpa_fx"),
-        fy=kwargs.get("mpa_fy"),
-        num_workers=kwargs.get("mpa_num_workers", 8),
-        cache_dir=kwargs.get("mpa_cache_dir"),
-        device=kwargs.get("mpa_device", "cuda"),
+        use_intrinsics=not kwargs.get("SARA_disable_intrinsics", False),
+        fx=kwargs.get("SARA_fx"),
+        fy=kwargs.get("SARA_fy"),
+        num_workers=kwargs.get("SARA_num_workers", 8),
+        cache_dir=kwargs.get("SARA_cache_dir"),
+        device=kwargs.get("SARA_device", "cuda"),
     )
 
-    result = run_mpa(cfg)
+    result = run_SARA(cfg)
     stem_to_path = {Path(p).stem: p for p in image_paths}
 
     pairs = []
@@ -396,7 +396,7 @@ def _select_pairs_with_mpa(
     for stem_i, stem_j, *_ in result["pairs"]:
         if stem_i not in stem_to_path or stem_j not in stem_to_path:
             logger.warning(
-                f"MPA pair ({stem_i}, {stem_j}) missing from image set, skipping."
+                f"SARA pair ({stem_i}, {stem_j}) missing from image set, skipping."
             )
             continue
         key = tuple(sorted((stem_i, stem_j)))
@@ -406,7 +406,7 @@ def _select_pairs_with_mpa(
         pairs.append((stem_to_path[stem_i], stem_to_path[stem_j]))
 
     if not pairs:
-        raise RuntimeError("MPA did not produce any valid image pairs.")
+        raise RuntimeError("SARA did not produce any valid image pairs.")
     return pairs
 
 
@@ -433,31 +433,31 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             "device": args.device,
             "num_workers": args.num_workers,
             "batch_size": args.batch_size,
-            "mpa_device": args.mpa_device,
-            "mpa_knn_k": args.mpa_knn_k,
-            "mpa_top_t_mutual": args.mpa_top_t_mutual,
-            "mpa_min_nn_for_ransac": args.mpa_min_nn_for_ransac,
-            "mpa_loop_budget_per_node": args.mpa_loop_budget_per_node,
-            "mpa_tau_overlap": args.mpa_tau_overlap,
-            "mpa_tau_parallax": args.mpa_tau_parallax,
-            "mpa_alpha": args.mpa_alpha,
-            "mpa_beta": args.mpa_beta,
-            "mpa_degree_cap": args.mpa_degree_cap,
-            "mpa_disable_intrinsics": args.mpa_disable_intrinsics,
-            "mpa_fx": args.mpa_fx,
-            "mpa_fy": args.mpa_fy,
-            # Advanced MPA augmentation
-            "mpa_enable_multi_scale_loops": args.mpa_enable_multi_scale_loops,
-            "mpa_small_loop_ratio": args.mpa_small_loop_ratio,
-            "mpa_medium_loop_ratio": args.mpa_medium_loop_ratio,
-            "mpa_large_loop_ratio": args.mpa_large_loop_ratio,
-            "mpa_enable_long_baseline_anchors": args.mpa_enable_long_baseline_anchors,
-            "mpa_anchor_count": args.mpa_anchor_count,
-            "mpa_anchor_percentile": args.mpa_anchor_percentile,
-            "mpa_enable_weak_view_reinforcement": args.mpa_enable_weak_view_reinforcement,
-            "mpa_weak_view_percentile": args.mpa_weak_view_percentile,
-            "mpa_weak_view_extra_edges": args.mpa_weak_view_extra_edges,
-            "use_mpa_matches": args.use_mpa_matches,
+            "SARA_device": args.SARA_device,
+            "SARA_knn_k": args.SARA_knn_k,
+            "SARA_top_t_mutual": args.SARA_top_t_mutual,
+            "SARA_min_nn_for_ransac": args.SARA_min_nn_for_ransac,
+            "SARA_loop_budget_per_node": args.SARA_loop_budget_per_node,
+            "SARA_tau_overlap": args.SARA_tau_overlap,
+            "SARA_tau_parallax": args.SARA_tau_parallax,
+            "SARA_alpha": args.SARA_alpha,
+            "SARA_beta": args.SARA_beta,
+            "SARA_degree_cap": args.SARA_degree_cap,
+            "SARA_disable_intrinsics": args.SARA_disable_intrinsics,
+            "SARA_fx": args.SARA_fx,
+            "SARA_fy": args.SARA_fy,
+            # Advanced SARA augmentation
+            "SARA_enable_multi_scale_loops": args.SARA_enable_multi_scale_loops,
+            "SARA_small_loop_ratio": args.SARA_small_loop_ratio,
+            "SARA_medium_loop_ratio": args.SARA_medium_loop_ratio,
+            "SARA_large_loop_ratio": args.SARA_large_loop_ratio,
+            "SARA_enable_long_baseline_anchors": args.SARA_enable_long_baseline_anchors,
+            "SARA_anchor_count": args.SARA_anchor_count,
+            "SARA_anchor_percentile": args.SARA_anchor_percentile,
+            "SARA_enable_weak_view_reinforcement": args.SARA_enable_weak_view_reinforcement,
+            "SARA_weak_view_percentile": args.SARA_weak_view_percentile,
+            "SARA_weak_view_extra_edges": args.SARA_weak_view_extra_edges,
+            "use_SARA_matches": args.use_SARA_matches,
         }
     else:
         # Direct function call mode
@@ -474,7 +474,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info(f"Input directory: {input_dir}")
     logger.info(f"Output directory: {output_dir}")
     logger.info(f"Feature extractor: {kwargs.get('feature_extractor', 'superpoint')}")
-    logger.info(f"Use MPA matches: {kwargs.get('use_mpa_matches', False)}")
+    logger.info(f"Use SARA matches: {kwargs.get('use_SARA_matches', False)}")
     logger.info(f"GPU brute force matching: {kwargs.get('use_brute_force', True)}")
     logger.info(f"High quality mode: {kwargs.get('high_quality', False)}")
 
@@ -601,11 +601,11 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
 
         cleanup_gpu_memory(device, "feature extraction")
 
-    # Stage 3: Pair selection (MPA only)
-    logger.info("Stage 3: Selecting pairs with MPA...")
+    # Stage 3: Pair selection (SARA only)
+    logger.info("Stage 3: Selecting pairs with SARA...")
     stage_start = time.time()
 
-    image_pairs = _select_pairs_with_mpa(
+    image_pairs = _select_pairs_with_SARA(
         input_dir,
         output_path,
         image_paths,
@@ -615,7 +615,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
 
     stage_times["pair_selection"] = time.time() - stage_start
     logger.info(
-        f"MPA produced {len(image_pairs)} candidate pairs in {stage_times['pair_selection']:.2f}s"
+        f"SARA produced {len(image_pairs)} candidate pairs in {stage_times['pair_selection']:.2f}s"
     )
 
     cleanup_gpu_memory(device, "pair selection")
@@ -624,9 +624,9 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info("Stage 4: Feature matching...")
     stage_start = time.time()
 
-    # Check if we should use MPA matches
-    use_mpa_matches = kwargs.get("use_mpa_matches", False)
-    mpa_matches_file = output_path / "mpa" / "mpa_matches.h5"
+    # Check if we should use SARA matches
+    use_SARA_matches = kwargs.get("use_SARA_matches", False)
+    SARA_matches_file = output_path / "SARA" / "SARA_matches.h5"
 
     # Check if matches already exist
     matches_file = output_path / "matches.h5"
@@ -635,46 +635,46 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     # Calculate expected number of matches for validation
     expected_pairs = len(image_pairs)
 
-    # Try to load MPA matches if enabled
-    if use_mpa_matches and mpa_matches_file.exists():
+    # Try to load SARA matches if enabled
+    if use_SARA_matches and SARA_matches_file.exists():
         try:
             from sfm.utils.io_utils import load_matches
 
-            logger.info(f"Loading MPA matches from {mpa_matches_file}...")
-            mpa_matches_raw = load_matches(mpa_matches_file)
+            logger.info(f"Loading SARA matches from {SARA_matches_file}...")
+            SARA_matches_raw = load_matches(SARA_matches_file)
 
             # Convert stem-based keys to full path-based keys
             stem_to_path = {Path(p).stem: p for p in image_paths}
             matches = {}
 
-            for (stem_i, stem_j), match_data in mpa_matches_raw.items():
+            for (stem_i, stem_j), match_data in SARA_matches_raw.items():
                 if stem_i in stem_to_path and stem_j in stem_to_path:
                     path_i = stem_to_path[stem_i]
                     path_j = stem_to_path[stem_j]
                     matches[(path_i, path_j)] = match_data
                 else:
-                    logger.warning(f"MPA match pair ({stem_i}, {stem_j}) not found in image paths")
+                    logger.warning(f"SARA match pair ({stem_i}, {stem_j}) not found in image paths")
 
             if len(matches) >= expected_pairs * 0.1:
                 logger.info(
-                    f"Loaded {len(matches)} matches from MPA (expected ~{expected_pairs})"
+                    f"Loaded {len(matches)} matches from SARA (expected ~{expected_pairs})"
                 )
                 stage_times["feature_matching"] = 0.0
 
                 # Save in standard format for consistency
                 save_matches(matches, matches_file)
-                logger.info(f"Saved MPA matches to standard format: {matches_file}")
+                logger.info(f"Saved SARA matches to standard format: {matches_file}")
             else:
                 logger.warning(
-                    f"MPA match count too low: {len(matches)} vs expected ~{expected_pairs}, falling back to LightGlue"
+                    f"SARA match count too low: {len(matches)} vs expected ~{expected_pairs}, falling back to LightGlue"
                 )
                 matches = None
         except Exception as e:
-            logger.warning(f"Could not load MPA matches ({e}), falling back to LightGlue")
+            logger.warning(f"Could not load SARA matches ({e}), falling back to LightGlue")
             matches = None
-    elif use_mpa_matches and not mpa_matches_file.exists():
+    elif use_SARA_matches and not SARA_matches_file.exists():
         logger.warning(
-            f"MPA matches requested but file not found: {mpa_matches_file}, falling back to LightGlue"
+            f"SARA matches requested but file not found: {SARA_matches_file}, falling back to LightGlue"
         )
         matches = None
     elif matches_file.exists() and matches_tensor_file.exists():
@@ -811,7 +811,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     # Clean up reconstruction memory
     cleanup_gpu_memory(device, "SfM reconstruction")
 
-    # Stage 9: Copy reconstruction files for 3DGS compatibility
+    # Stage 9: Copy reconstruction files for 3DGS coSARAtibility
     gs_input_dir = kwargs.get("copy_to_3dgs_dir")
     if gs_input_dir:
         logger.info("Stage 9: Preparing files for 3DGS...")
@@ -874,7 +874,7 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info("Stage 10: Saving results...")
     stage_start = time.time()
 
-    # Save in COLMAP format for 3DGS compatibility
+    # Save in COLMAP format for 3DGS coSARAtibility
     colmap_dir = output_path / "colmap"
     colmap_dir.mkdir(exist_ok=True)
 

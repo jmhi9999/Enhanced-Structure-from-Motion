@@ -116,7 +116,7 @@ def create_comparison_table(
 
     # Create comparison table
     print("\n" + "=" * 120)
-    print("RECONSTRUCTION COMPARISON")
+    print("RECONSTRUCTION COmpaRISON")
     print("=" * 120)
 
     # Print header

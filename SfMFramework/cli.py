@@ -1,25 +1,3 @@
-#!/usr/bin/env python3
-"""
-Command-line interface for matching framework.
-
-Examples:
-    # SIFT + NN matcher + exhaustive pairs
-    python -m matching_framework.cli \
-        --images data/images \
-        --output results \
-        --extractor sift \
-        --matcher nn \
-        --pair_selector exhaustive
-
-    # SuperPoint + LightGlue + MPA
-    python -m matching_framework.cli \
-        --images data/images \
-        --output results \
-        --extractor superpoint \
-        --matcher lightglue \
-        --pair_selector mpa
-"""
-
 import argparse
 from pathlib import Path
 import sys

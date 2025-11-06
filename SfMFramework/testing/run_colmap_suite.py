@@ -22,8 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from matching_framework.extractors import ExtractorFactory
-from matching_framework.pair_selectors import PairSelectorFactory
+from SfMFramework.extractors import ExtractorFactory
+from SfMFramework.pair_selectors import PairSelectorFactory
 
 logger = logging.getLogger("colmap_suite")
 

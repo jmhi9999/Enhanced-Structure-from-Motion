@@ -1,5 +1,5 @@
 """
-MPA (Multi-scale Parallax-Aware) pair selection.
+SARA (Multi-scale Parallax-Aware) pair selection.
 """
 
 from typing import List, Tuple, Dict
@@ -10,33 +10,33 @@ sys.path.append(str(Path(__file__).parent.parent))
 from pair_selectors.base import BasePairSelector, PairSelectorConfig
 
 
-class MPAPairSelector(BasePairSelector):
+class SARAPairSelector(BasePairSelector):
     """
-    MPA pair selection using DINO embeddings + geometric scoring.
+    SARA pair selection using DINO embeddings + geometric scoring.
 
     Excellent for large datasets with intelligent pair selection.
     O(n log n) complexity.
     """
 
     def _setup(self):
-        """Setup MPA dependencies."""
+        """Setup SARA dependencies."""
         try:
             sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-            from mpa.config import MPAConfig
-            from mpa.cli import run_mpa
-            self.MPAConfig = MPAConfig
-            self.run_mpa = run_mpa
+            from SARA.config import SARAConfig
+            from SARA.cli import run_SARA
+            self.SARAConfig = SARAConfig
+            self.run_SARA = run_SARA
         except ImportError as e:
-            raise ImportError(f"MPA module not found: {e}")
+            raise ImportError(f"SARA module not found: {e}")
 
     def _select_impl(
         self,
         image_list: List[Path],
         features: Dict[Path, any] = None
     ) -> List[Tuple[Path, Path]]:
-        """Select pairs using MPA."""
+        """Select pairs using SARA."""
         if features is None:
-            raise ValueError("MPA requires features for pair selection")
+            raise ValueError("SARA requires features for pair selection")
 
         # Create temporary output directory
         import tempfile
@@ -45,8 +45,8 @@ class MPAPairSelector(BasePairSelector):
             img_dir = str(image_list[0].parent)
             out_dir = tmp_dir
 
-            # Configure MPA
-            cfg = self.MPAConfig(
+            # Configure SARA
+            cfg = self.SARAConfig(
                 img_dir=img_dir,
                 out_dir=out_dir,
                 knn_k=self.config.extra.get("knn_k", 30),
@@ -59,11 +59,11 @@ class MPAPairSelector(BasePairSelector):
                 device=self.config.device,
             )
 
-            # Export features to MPA format
-            self._export_features_for_mpa(features, Path(out_dir))
+            # Export features to SARA format
+            self._export_features_for_SARA(features, Path(out_dir))
 
-            # Run MPA
-            result = self.run_mpa(cfg)
+            # Run SARA
+            result = self.run_SARA(cfg)
 
             # Parse pairs
             pairs = []
@@ -75,17 +75,17 @@ class MPAPairSelector(BasePairSelector):
 
             return pairs
 
-    def _export_features_for_mpa(self, features: Dict, mpa_root: Path):
-        """Export features to MPA-compatible format."""
+    def _export_features_for_SARA(self, features: Dict, SARA_root: Path):
+        """Export features to SARA-coSARAtible format."""
         import numpy as np
 
-        features_dir = mpa_root / "features"
+        features_dir = SARA_root / "features"
         features_dir.mkdir(parents=True, exist_ok=True)
 
         for path, feat_data in features.items():
             stem = path.stem
 
-            # Convert to MPA format
+            # Convert to SARA format
             kpts = feat_data.keypoints
             desc = feat_data.descriptors
             scores = feat_data.scores

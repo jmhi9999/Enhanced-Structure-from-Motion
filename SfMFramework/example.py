@@ -9,7 +9,7 @@ This script shows how to:
 """
 
 from pathlib import Path
-from matching_framework import (
+from SfMFramework import (
     ExtractorFactory,
     ExtractorConfig,
     MatcherFactory,
