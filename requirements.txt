@@ -1,34 +1,53 @@
-# Core dependencies
-torch>=1.9.1
-torchvision>=0.15.0
-opencv-python>=4.8.0
+# Python 3.10 + CUDA 12.1 최적화 버전
+# GPU 가속 패키지 우선
+
+# ====================
+# PyTorch (CUDA 12.1)
+# ====================
+--index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchvision==0.20.1
+--index-url https://pypi.org/simple
+
+# ====================
+# GPU 가속 라이브러리
+# ====================
+cupy-cuda12x==13.3.0
+faiss-gpu==1.9.0  # conda로 설치 권장: conda install -c conda-forge faiss-gpu=1.9.0
+
+# ====================
+# Core CV 라이브러리
+# ====================
+opencv-contrib-python==4.10.0.84
 numpy==1.26.4
-scipy>=1.10.0
-Pillow>=9.5.0
-tqdm>=4.65.0
-matplotlib>=3.7.0
+scipy==1.13.1
+Pillow==11.0.0
+kornia==0.8.1
 
-# GPU acceleration
-cupy-cuda12x>=12.0.0
-faiss-gpu>=1.7.0
-pyceres>=0.1.0
-
-# Computer vision and feature extraction
-kornia>=0.6.12
+# ====================
+# SfM 관련
+# ====================
+pyceres==2.4
 lightglue @ git+https://github.com/cvg/LightGlue.git
 
-# JIT compilation and optimization
-numba>=0.58.0
+# ====================
+# JIT & 최적화
+# ====================
+numba==0.60.0
 
-# Memory monitoring
-psutil>=5.9.0
+# ====================
+# 유틸리티
+# ====================
+tqdm==4.67.1
+matplotlib==3.9.2
+psutil==7.0.0
+h5py==3.14.0
 
-# Data storage and serialization
-h5py>=3.8.0
-
-
-# Development and testing
-pytest>=7.0.0
-black>=22.0.0
-flake8>=5.0.0
-mypy>=1.0.0
+# ====================
+# 개발 도구
+# ====================
+pytest==8.3.4
+black==24.10.0
+flake8==7.1.1
+mypy==1.13.0
+a

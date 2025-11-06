@@ -6,6 +6,7 @@ import os
 import subprocess
 import sqlite3
 import struct
+import multiprocessing
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
@@ -24,7 +25,7 @@ Point3D = namedtuple("Point3D", ["id", "xyz", "rgb", "error", "image_ids", "poin
 
 def filter_matches_with_magsac(features: Dict[str, Any], matches: Dict[Tuple[str, str], Any]) -> Dict[Tuple[str, str], Any]:
     """Filter matches using cv2.USAC_MAGSAC geometric verification with optimized parameters"""
-    logger.info("Filtering matches with cv2 USAC_MAGSAC (EXTREME parameters: threshold=0.8, confidence=0.9999, maxIters=5000)...")
+    logger.info("Filtering matches with cv2 USAC_MAGSAC (threshold=2.0, confidence=0.999, maxIters=1000)...")
     
     filtered_matches = {}
     
@@ -255,32 +256,102 @@ def create_colmap_database(features: Dict[str, Any], matches: Dict[Tuple[str, st
     return image_ids
 
 
-def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path) -> bool:
-    """Run COLMAP using binary executable"""
-    
+def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path,
+                      mapper_params: Optional[Dict] = None, timeout: int = 1200) -> bool:
+    """Run COLMAP using binary executable
+
+    Args:
+        database_path: Path to COLMAP database
+        image_dir: Directory containing images
+        output_path: Output directory
+        mapper_params: Optional mapper parameters (min_num_matches, etc.)
+        timeout: Timeout in seconds (default: 1200 = 20 minutes)
+
+    Returns:
+        True if successful, False otherwise
+    """
+
     sparse_path = output_path / "sparse"
     sparse_path.mkdir(exist_ok=True)
-    
-    # Step 2: Incremental mapping (hloc-style minimal options)
-    logger.info("Running COLMAP incremental mapping...")
-    cmd = [
-        "colmap", "mapper",
-        "--database_path", str(database_path),
-        "--image_path", str(image_dir),
-        "--output_path", str(sparse_path),
-        "--Mapper.num_threads", "16",
-        "--Mapper.ba_local_max_num_iterations", "20",  # 25->20 (안전한 가속)
-        "--Mapper.ba_global_max_num_iterations", "35",  # 50->35 (안전한 가속)
-        "--Mapper.max_num_models", "1",  # 단일 모델
-        "--Mapper.max_model_overlap", "15",  # 20->15 (적당한 가속)
-        "--Mapper.min_num_matches", "10",   # Reduced from 15 to 8
-        "--Mapper.ba_global_images_ratio", "1.2",  # 메모리 효율성
-        "--Mapper.ba_global_points_ratio", "1.2"  # 메모리 효율성
-    ]
-    
+
+    # Merge with user-provided parameters
+    mapper_params = mapper_params or {}
+    speed_mode = mapper_params.pop('speed_mode', False)
+
+    if speed_mode:
+        # Speed-focused parameters (for exhaustive matching with many pairs)
+        logger.info(f"Running COLMAP incremental mapping in SPEED MODE (timeout={timeout}s)...")
+        logger.info(f"Mapper parameters: min_matches={mapper_params.get('min_num_matches', 8)}")
+
+        cmd = [
+            "colmap", "mapper",
+            "--database_path", str(database_path),
+            "--image_path", str(image_dir),
+            "--output_path", str(sparse_path),
+            "--Mapper.num_threads", str(multiprocessing.cpu_count()),
+            "--Mapper.ba_local_max_num_iterations", "20",  # Reduced from 40
+            "--Mapper.ba_global_max_num_iterations", "35",  # Reduced from 100
+            "--Mapper.max_num_models", "1",
+            "--Mapper.max_model_overlap", "15",
+            "--Mapper.min_num_matches", str(mapper_params.get('min_num_matches', 8)),
+            "--Mapper.ba_global_images_ratio", "1.2",
+            "--Mapper.ba_global_points_ratio", "1.2"
+        ]
+    else:
+        # Default parameters (lenient for general use)
+        default_params = {
+            'min_num_matches': 10,
+            'abs_pose_min_inliers': 15,
+            'abs_pose_min_inlier_ratio': 0.15,
+            'init_min_tri_angle': 2.0,
+            'tri_min_angle': 1.0,
+        }
+
+        params = {**default_params, **mapper_params}
+
+        logger.info(f"Running COLMAP incremental mapping (timeout={timeout}s)...")
+        logger.info(f"Mapper parameters: min_matches={params['min_num_matches']}, "
+                    f"min_inliers={params.get('abs_pose_min_inliers', 15)}, "
+                    f"min_inlier_ratio={params.get('abs_pose_min_inlier_ratio', 0.15)}")
+
+        cmd = [
+            "colmap", "mapper",
+            "--database_path", str(database_path),
+            "--image_path", str(image_dir),
+            "--output_path", str(sparse_path),
+
+            # Threading: Auto-detect CPU cores
+            "--Mapper.num_threads", str(multiprocessing.cpu_count()),
+
+            # BA iterations
+            "--Mapper.ba_local_max_num_iterations", "40",
+            "--Mapper.ba_global_max_num_iterations", "100",
+
+            # Matching thresholds (configurable)
+            "--Mapper.min_num_matches", str(params['min_num_matches']),
+            "--Mapper.abs_pose_min_num_inliers", str(params.get('abs_pose_min_inliers', 15)),
+            "--Mapper.abs_pose_min_inlier_ratio", str(params.get('abs_pose_min_inlier_ratio', 0.15)),
+
+            # Triangulation (configurable)
+            "--Mapper.init_min_tri_angle", str(params.get('init_min_tri_angle', 2.0)),
+            "--Mapper.tri_min_angle", str(params.get('tri_min_angle', 1.0)),
+
+            # Model selection
+            "--Mapper.max_num_models", "1",
+            "--Mapper.max_model_overlap", "20",
+
+            # BA memory
+            "--Mapper.ba_global_images_ratio", "1.1",
+            "--Mapper.ba_global_points_ratio", "1.1",
+
+            # Filtering
+            "--Mapper.filter_max_reproj_error", "4.0",  # Lenient default
+            "--Mapper.filter_min_tri_angle", "1.0"  # Lenient default
+        ]
+
     try:
         logger.info(f"Running command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         
         logger.info(f"COLMAP mapper return code: {result.returncode}")
         logger.info(f"COLMAP stdout: {result.stdout}")
@@ -905,23 +976,38 @@ def read_colmap_binary_results(sparse_path: Path) -> Tuple[Dict, Dict, Dict]:
 
 
 def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[str, str], Any],
-                                output_path: Path, image_dir: Path) -> Tuple[Dict, Dict, Dict]:
-    """Run complete COLMAP reconstruction using binary executable"""
-    
+                                output_path: Path, image_dir: Path,
+                                mapper_params: Optional[Dict] = None,
+                                timeout: int = 1200) -> Tuple[Dict, Dict, Dict]:
+    """Run complete COLMAP reconstruction using binary executable
+
+    Args:
+        features: Dictionary of features
+        matches: Dictionary of matches
+        output_path: Output directory
+        image_dir: Image directory
+        mapper_params: Optional COLMAP mapper parameters
+        timeout: Timeout in seconds (default: 1200 = 20 minutes)
+
+    Returns:
+        Tuple of (points3d, cameras, images)
+    """
+
     database_path = output_path / "database.db"
-    
+
     # First filter matches with cv2 MAGSAC
     filtered_matches = filter_matches_with_magsac(features, matches)
-    
+
     if not filtered_matches:
         logger.error("No matches passed MAGSAC filtering")
         return {}, {}, {}
-    
+
     # Create database with filtered matches
     image_ids = create_colmap_database(features, filtered_matches, database_path)
-    
-    # Run COLMAP binary
-    success = run_colmap_binary(database_path, image_dir, output_path)
+
+    # Run COLMAP binary with custom parameters
+    success = run_colmap_binary(database_path, image_dir, output_path,
+                                mapper_params=mapper_params, timeout=timeout)
     
     if success:
         # Read results

@@ -16,12 +16,9 @@ from typing import Dict, List, Any
 import torch
 import numpy as np
 from tqdm import tqdm
-from PIL import Image
 
 from sfm.core.feature_extractor import FeatureExtractorFactory
 from sfm.core.feature_matcher import EnhancedLightGlueMatcher
-from sfm.core.algebraic_consensus import AlgebraicConsensus, convert_matches_to_correspondences
-from sfm.core.gpu_vocabulary_tree import GPUVocabularyTree
 from sfm.utils.io_utils import (
     save_colmap_format,
     load_images,
@@ -73,72 +70,155 @@ def parse_args():
         help="Use GPU brute force matching (default and recommended)",
     )
     parser.add_argument(
-        "--use_vocab_tree",
-        action="store_true",
-        help="Use vocabulary tree for smart pair selection (for very large datasets)",
-    )
-    parser.add_argument(
-        "--max_pairs_per_image",
-        type=int,
-        default=20,
-        help="Maximum pairs per image for vocabulary tree",
-    )
-    parser.add_argument(
         "--max_total_pairs",
         type=int,
         default=None,
         help="Maximum total pairs for brute force matching",
     )
     parser.add_argument(
-        "--consensus_mode",
+        "--mpa_device",
         type=str,
-        default="deterministic",
-        choices=["deterministic", "ransac"],
-        help="Algebraic consensus mode for geometric verification",
+        default="cuda",
+        help="Device for MPA DINO embedding computation",
     )
     parser.add_argument(
-        "--consensus_tau_deg",
+        "--mpa_knn_k",
+        type=int,
+        default=30,
+        help="Number of nearest neighbours per image for MPA candidate graph",
+    )
+    parser.add_argument(
+        "--mpa_top_t_mutual",
+        type=int,
+        default=128,
+        help="Mutual nearest descriptor count per pair for MPA fast pre-matching",
+    )
+    parser.add_argument(
+        "--mpa_min_nn_for_ransac",
+        type=int,
+        default=32,
+        help="Minimum mutual matches to run MPA mini-RANSAC",
+    )
+    parser.add_argument(
+        "--mpa_loop_budget_per_node",
         type=float,
-        default=17.0,
-        help="Orientation threshold in degrees for consensus filtering",
+        default=0.5,
+        help="Additional loop edges per node budget for MPA augmentation",
     )
     parser.add_argument(
-        "--consensus_inlier_threshold",
+        "--mpa_tau_overlap",
         type=float,
-        default=5.0,
-        help="Inlier threshold in pixels for consensus verification",
+        default=0.10,
+        help="Minimum overlap ratio threshold for MPA edges",
     )
     parser.add_argument(
-        "--consensus_min_inlier_ratio",
+        "--mpa_tau_parallax",
+        type=float,
+        default=0.05,
+        help="Minimum parallax threshold for MPA edges",
+    )
+    parser.add_argument(
+        "--mpa_alpha",
+        type=float,
+        default=1.0,
+        help="Overlap exponent for MPA edge scoring",
+    )
+    parser.add_argument(
+        "--mpa_beta",
+        type=float,
+        default=1.0,
+        help="Parallax exponent for MPA edge scoring",
+    )
+    parser.add_argument(
+        "--mpa_degree_cap",
+        type=int,
+        default=6,
+        help="Optional degree cap enforced during MPA leaf augmentation",
+    )
+    parser.add_argument(
+        "--mpa_disable_intrinsics",
+        action="store_true",
+        help="Disable intrinsics usage inside MPA parallax proxy",
+    )
+    parser.add_argument(
+        "--mpa_fx",
+        type=float,
+        default=None,
+        help="Fallback fx value if intrinsics are supplied manually to MPA",
+    )
+    parser.add_argument(
+        "--mpa_fy",
+        type=float,
+        default=None,
+        help="Fallback fy value if intrinsics are supplied manually to MPA",
+    )
+    # MPA Advanced Augmentation
+    parser.add_argument(
+        "--mpa_enable_multi_scale_loops",
+        action="store_true",
+        default=True,
+        help="Enable multi-scale loop augmentation for MPA",
+    )
+    parser.add_argument(
+        "--mpa_small_loop_ratio",
+        type=float,
+        default=0.5,
+        help="Fraction of loop budget for small loops (path length 2)",
+    )
+    parser.add_argument(
+        "--mpa_medium_loop_ratio",
+        type=float,
+        default=0.3,
+        help="Fraction of loop budget for medium loops (path length 3-4)",
+    )
+    parser.add_argument(
+        "--mpa_large_loop_ratio",
         type=float,
         default=0.2,
-        help="Minimum inlier ratio required to keep a verified pair",
+        help="Fraction of loop budget for large loops (path length 5+)",
     )
     parser.add_argument(
-        "--consensus_max_combos",
-        type=int,
-        default=500,
-        help="Maximal minimal-set combinations in deterministic mode (<=0 for unlimited)",
+        "--mpa_enable_long_baseline_anchors",
+        action="store_true",
+        default=True,
+        help="Enable long-baseline anchor edges for scale stability",
     )
     parser.add_argument(
-        "--consensus_min_correspondences",
+        "--mpa_anchor_count",
         type=int,
         default=10,
-        help="Minimum correspondences required before running consensus verification",
+        help="Number of long-baseline anchor edges to add",
     )
     parser.add_argument(
-        "--consensus_n_trials",
-        type=int,
-        default=100,
-        help="Maximum RANSAC trials when consensus mode is 'ransac'",
-    )
-    parser.add_argument(
-        "--consensus_confidence",
+        "--mpa_anchor_percentile",
         type=float,
-        default=0.99,
-        help="RANSAC confidence level for consensus verification",
+        default=0.95,
+        help="Percentile threshold for baseline length (top 5%)",
     )
-
+    parser.add_argument(
+        "--mpa_enable_weak_view_reinforcement",
+        action="store_true",
+        default=True,
+        help="Enable weak-view reinforcement for robust initialization",
+    )
+    parser.add_argument(
+        "--mpa_weak_view_percentile",
+        type=float,
+        default=0.20,
+        help="Percentile threshold for weak views (bottom 20%)",
+    )
+    parser.add_argument(
+        "--mpa_weak_view_extra_edges",
+        type=int,
+        default=2,
+        help="Number of extra edges to add per weak view",
+    )
+    parser.add_argument(
+        "--use_mpa_matches",
+        action="store_true",
+        default=False,
+        help="Use matches computed by MPA (mutual NN + RANSAC) instead of LightGlue matching",
+    )
     # Device and performance
     parser.add_argument(
         "--device", type=str, default="auto", help="Device to use (auto, cpu, cuda)"
@@ -222,6 +302,114 @@ def setup_logging(output_dir: str):
     )
 
 
+def _export_features_for_mpa(features: Dict[str, Any], mpa_root: Path) -> Dict[str, Dict[str, np.ndarray]]:
+    """Write per-image ALIKED npz files expected by the MPA pipeline."""
+    try:
+        from mpa.io_utils import ensure_dir, normalise_feature_dict
+    except ImportError as exc:
+        raise ImportError("MPA modules are required but not installed.") from exc
+
+    features_dir = ensure_dir(mpa_root / "features")
+    converted: Dict[str, Dict[str, Any]] = {}
+    for key, payload in features.items():
+        converted_payload: Dict[str, Any] = {}
+        for field in ("keypoints", "descriptors", "scores"):
+            value = payload[field]
+            if torch.is_tensor(value):
+                converted_payload[field] = value.detach().cpu().numpy()
+            else:
+                converted_payload[field] = np.asarray(value)
+        converted_payload["image_shape"] = payload.get("image_shape", payload.get("shape"))
+        converted[key] = converted_payload
+
+    normalised = normalise_feature_dict(converted)
+
+    for stem, payload in normalised.items():
+        shape = np.asarray(payload.get("shape", (0, 0)), dtype=np.int32)
+        np.savez(
+            features_dir / f"{stem}.npz",
+            keypoints=payload["kpt"].astype(np.float32),
+            descriptors=payload["desc"].astype(np.float32),
+            scores=payload["score"].astype(np.float32),
+            image_shape=shape,
+        )
+    return normalised
+
+
+def _select_pairs_with_mpa(
+    input_dir: str,
+    output_path: Path,
+    image_paths: List[str],
+    features: Dict[str, Any],
+    kwargs: Dict[str, Any],
+) -> List[tuple[str, str]]:
+    """Run the MPA pair selection pipeline and return image path pairs."""
+    try:
+        from mpa.config import MPAConfig
+        from mpa.cli import run_mpa
+    except ImportError as exc:
+        raise ImportError("MPA modules are required but not installed.") from exc
+
+    mpa_root = output_path / "mpa"
+    mpa_root.mkdir(parents=True, exist_ok=True)
+    _export_features_for_mpa(features, mpa_root)
+
+    cfg = MPAConfig(
+        img_dir=input_dir,
+        out_dir=str(mpa_root),
+        knn_k=kwargs.get("mpa_knn_k", 30),
+        top_t_mutual=kwargs.get("mpa_top_t_mutual", 128),
+        min_nn_for_ransac=kwargs.get("mpa_min_nn_for_ransac", 32),
+        ransac_iters=kwargs.get("mpa_ransac_iters", 15),
+        ransac_conf=kwargs.get("mpa_ransac_conf", 0.999),
+        tau_overlap=kwargs.get("mpa_tau_overlap", 0.10),
+        tau_parallax=kwargs.get("mpa_tau_parallax", 0.05),
+        alpha=kwargs.get("mpa_alpha", 1.0),
+        beta=kwargs.get("mpa_beta", 1.0),
+        loop_budget_per_node=kwargs.get("mpa_loop_budget_per_node", 0.5),
+        deg_cap=kwargs.get("mpa_degree_cap", 6),
+        # Advanced augmentation strategies
+        enable_multi_scale_loops=kwargs.get("mpa_enable_multi_scale_loops", True),
+        small_loop_ratio=kwargs.get("mpa_small_loop_ratio", 0.5),
+        medium_loop_ratio=kwargs.get("mpa_medium_loop_ratio", 0.3),
+        large_loop_ratio=kwargs.get("mpa_large_loop_ratio", 0.2),
+        enable_long_baseline_anchors=kwargs.get("mpa_enable_long_baseline_anchors", True),
+        anchor_count=kwargs.get("mpa_anchor_count", 10),
+        anchor_percentile=kwargs.get("mpa_anchor_percentile", 0.95),
+        enable_weak_view_reinforcement=kwargs.get("mpa_enable_weak_view_reinforcement", True),
+        weak_view_percentile=kwargs.get("mpa_weak_view_percentile", 0.20),
+        weak_view_extra_edges=kwargs.get("mpa_weak_view_extra_edges", 2),
+        # Standard parameters
+        use_intrinsics=not kwargs.get("mpa_disable_intrinsics", False),
+        fx=kwargs.get("mpa_fx"),
+        fy=kwargs.get("mpa_fy"),
+        num_workers=kwargs.get("mpa_num_workers", 8),
+        cache_dir=kwargs.get("mpa_cache_dir"),
+        device=kwargs.get("mpa_device", "cuda"),
+    )
+
+    result = run_mpa(cfg)
+    stem_to_path = {Path(p).stem: p for p in image_paths}
+
+    pairs = []
+    seen = set()
+    for stem_i, stem_j, *_ in result["pairs"]:
+        if stem_i not in stem_to_path or stem_j not in stem_to_path:
+            logger.warning(
+                f"MPA pair ({stem_i}, {stem_j}) missing from image set, skipping."
+            )
+            continue
+        key = tuple(sorted((stem_i, stem_j)))
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append((stem_to_path[stem_i], stem_to_path[stem_j]))
+
+    if not pairs:
+        raise RuntimeError("MPA did not produce any valid image pairs.")
+    return pairs
+
+
 def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     """Enhanced SfM pipeline for 3DGS - Main API function"""
 
@@ -239,22 +427,37 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             "max_keypoints": args.max_keypoints,
             "max_image_size": args.max_image_size,
             "use_brute_force": args.use_brute_force,
-            "use_vocab_tree": args.use_vocab_tree,
-            "max_pairs_per_image": args.max_pairs_per_image,
             "max_total_pairs": args.max_total_pairs,
             "copy_to_3dgs_dir": args.copy_to_3dgs_dir,
             "high_quality": args.high_quality,
             "device": args.device,
             "num_workers": args.num_workers,
             "batch_size": args.batch_size,
-            "consensus_mode": args.consensus_mode,
-            "consensus_tau_deg": args.consensus_tau_deg,
-            "consensus_inlier_threshold": args.consensus_inlier_threshold,
-            "consensus_min_inlier_ratio": args.consensus_min_inlier_ratio,
-            "consensus_max_combos": args.consensus_max_combos,
-            "consensus_min_correspondences": args.consensus_min_correspondences,
-            "consensus_n_trials": args.consensus_n_trials,
-            "consensus_confidence": args.consensus_confidence,
+            "mpa_device": args.mpa_device,
+            "mpa_knn_k": args.mpa_knn_k,
+            "mpa_top_t_mutual": args.mpa_top_t_mutual,
+            "mpa_min_nn_for_ransac": args.mpa_min_nn_for_ransac,
+            "mpa_loop_budget_per_node": args.mpa_loop_budget_per_node,
+            "mpa_tau_overlap": args.mpa_tau_overlap,
+            "mpa_tau_parallax": args.mpa_tau_parallax,
+            "mpa_alpha": args.mpa_alpha,
+            "mpa_beta": args.mpa_beta,
+            "mpa_degree_cap": args.mpa_degree_cap,
+            "mpa_disable_intrinsics": args.mpa_disable_intrinsics,
+            "mpa_fx": args.mpa_fx,
+            "mpa_fy": args.mpa_fy,
+            # Advanced MPA augmentation
+            "mpa_enable_multi_scale_loops": args.mpa_enable_multi_scale_loops,
+            "mpa_small_loop_ratio": args.mpa_small_loop_ratio,
+            "mpa_medium_loop_ratio": args.mpa_medium_loop_ratio,
+            "mpa_large_loop_ratio": args.mpa_large_loop_ratio,
+            "mpa_enable_long_baseline_anchors": args.mpa_enable_long_baseline_anchors,
+            "mpa_anchor_count": args.mpa_anchor_count,
+            "mpa_anchor_percentile": args.mpa_anchor_percentile,
+            "mpa_enable_weak_view_reinforcement": args.mpa_enable_weak_view_reinforcement,
+            "mpa_weak_view_percentile": args.mpa_weak_view_percentile,
+            "mpa_weak_view_extra_edges": args.mpa_weak_view_extra_edges,
+            "use_mpa_matches": args.use_mpa_matches,
         }
     else:
         # Direct function call mode
@@ -271,33 +474,9 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     logger.info(f"Input directory: {input_dir}")
     logger.info(f"Output directory: {output_dir}")
     logger.info(f"Feature extractor: {kwargs.get('feature_extractor', 'superpoint')}")
+    logger.info(f"Use MPA matches: {kwargs.get('use_mpa_matches', False)}")
     logger.info(f"GPU brute force matching: {kwargs.get('use_brute_force', True)}")
     logger.info(f"High quality mode: {kwargs.get('high_quality', False)}")
-
-    consensus_defaults = {
-        "consensus_mode": "deterministic",
-        "consensus_tau_deg": 17.0,
-        "consensus_inlier_threshold": 5.0,
-        "consensus_min_inlier_ratio": 0.2,
-        "consensus_max_combos": 500,
-        "consensus_min_correspondences": 10,
-        "consensus_n_trials": 100,
-        "consensus_confidence": 0.99,
-        "consensus_use_closed_form": True,
-        "consensus_use_orientation_filter": True,
-        "consensus_min_inliers": 3,
-    }
-    for key, value in consensus_defaults.items():
-        kwargs.setdefault(key, value)
-    kwargs["consensus_mode"] = str(kwargs.get("consensus_mode", "deterministic")).lower()
-
-    logger.info(
-        "Algebraic consensus mode: %s (tau=%.1f°, inlier_threshold=%.2fpx, min_ratio=%.2f)",
-        kwargs["consensus_mode"],
-        kwargs.get("consensus_tau_deg", 17.0),
-        kwargs.get("consensus_inlier_threshold", 5.0),
-        kwargs.get("consensus_min_inlier_ratio", 0.2),
-    )
 
     # Performance tracking
     start_time = time.time()
@@ -422,75 +601,32 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
 
         cleanup_gpu_memory(device, "feature extraction")
 
-    # Stage 3: Smart pair selection (vocabulary tree + sequential)
-    logger.info("Stage 3: Smart pair selection (vocabulary tree + sequential)...")
+    # Stage 3: Pair selection (MPA only)
+    logger.info("Stage 3: Selecting pairs with MPA...")
     stage_start = time.time()
 
-    # Always generate sequential pairs for temporal consistency
-    sequential_overlap = 5  # Number of consecutive images to match
-    sequential_pairs = []
-
-    # Sort image paths for sequential ordering
-    sorted_image_paths = sorted(image_paths)
-
-    for i, img1 in enumerate(sorted_image_paths):
-        # Match with next few images in sequence
-        for j in range(1, min(sequential_overlap + 1, len(sorted_image_paths) - i)):
-            img2 = sorted_image_paths[i + j]
-            sequential_pairs.append((img1, img2))
-
-    logger.info(f"Generated {len(sequential_pairs)} sequential pairs")
-
-    if kwargs.get("use_vocab_tree", False):
-        # Use vocabulary tree for additional similarity-based pairs
-        vocab_tree = GPUVocabularyTree(
-            device=device,
-            config={
-                "vocab_size": 10000,
-                "vocab_depth": 6,
-                "vocab_branching_factor": 10,
-            },
-            output_path=str(output_path),
-        )
-
-        # Build vocabulary
-        vocab_tree.build_vocabulary(features)
-
-        # Get vocabulary tree pairs
-        vocab_tree_pairs = vocab_tree.get_image_pairs_for_matching(
-            features, max_pairs_per_image=kwargs.get("max_pairs_per_image", 20)
-        )
-
-        # Combine sequential and vocabulary tree pairs (remove duplicates)
-        all_pairs = list(set(sequential_pairs + vocab_tree_pairs))
-        image_pairs = all_pairs
-
-        logger.info(f"Selected {len(vocab_tree_pairs)} pairs using vocabulary tree")
-        logger.info(
-            f"Combined total: {len(image_pairs)} unique pairs (sequential + vocabulary tree)"
-        )
-    else:
-        # Use only sequential pairs for smaller datasets
-        image_pairs = sequential_pairs
-        logger.info(f"Using sequential matching: {len(image_pairs)} pairs")
+    image_pairs = _select_pairs_with_mpa(
+        input_dir,
+        output_path,
+        image_paths,
+        features,
+        kwargs,
+    )
 
     stage_times["pair_selection"] = time.time() - stage_start
-    logger.info(f"Pair selection completed in {stage_times['pair_selection']:.2f}s")
-
-    # Clean up vocabulary tree memory if used
-    if "vocab_tree" in locals():
-        try:
-            if hasattr(vocab_tree, "clear_memory"):
-                vocab_tree.clear_memory()
-            del vocab_tree
-        except Exception as e:
-            logger.warning(f"Error cleaning up vocabulary tree: {e}")
+    logger.info(
+        f"MPA produced {len(image_pairs)} candidate pairs in {stage_times['pair_selection']:.2f}s"
+    )
 
     cleanup_gpu_memory(device, "pair selection")
 
     # Stage 4: Feature matching
     logger.info("Stage 4: Feature matching...")
     stage_start = time.time()
+
+    # Check if we should use MPA matches
+    use_mpa_matches = kwargs.get("use_mpa_matches", False)
+    mpa_matches_file = output_path / "mpa" / "mpa_matches.h5"
 
     # Check if matches already exist
     matches_file = output_path / "matches.h5"
@@ -499,7 +635,49 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
     # Calculate expected number of matches for validation
     expected_pairs = len(image_pairs)
 
-    if matches_file.exists() and matches_tensor_file.exists():
+    # Try to load MPA matches if enabled
+    if use_mpa_matches and mpa_matches_file.exists():
+        try:
+            from sfm.utils.io_utils import load_matches
+
+            logger.info(f"Loading MPA matches from {mpa_matches_file}...")
+            mpa_matches_raw = load_matches(mpa_matches_file)
+
+            # Convert stem-based keys to full path-based keys
+            stem_to_path = {Path(p).stem: p for p in image_paths}
+            matches = {}
+
+            for (stem_i, stem_j), match_data in mpa_matches_raw.items():
+                if stem_i in stem_to_path and stem_j in stem_to_path:
+                    path_i = stem_to_path[stem_i]
+                    path_j = stem_to_path[stem_j]
+                    matches[(path_i, path_j)] = match_data
+                else:
+                    logger.warning(f"MPA match pair ({stem_i}, {stem_j}) not found in image paths")
+
+            if len(matches) >= expected_pairs * 0.1:
+                logger.info(
+                    f"Loaded {len(matches)} matches from MPA (expected ~{expected_pairs})"
+                )
+                stage_times["feature_matching"] = 0.0
+
+                # Save in standard format for consistency
+                save_matches(matches, matches_file)
+                logger.info(f"Saved MPA matches to standard format: {matches_file}")
+            else:
+                logger.warning(
+                    f"MPA match count too low: {len(matches)} vs expected ~{expected_pairs}, falling back to LightGlue"
+                )
+                matches = None
+        except Exception as e:
+            logger.warning(f"Could not load MPA matches ({e}), falling back to LightGlue")
+            matches = None
+    elif use_mpa_matches and not mpa_matches_file.exists():
+        logger.warning(
+            f"MPA matches requested but file not found: {mpa_matches_file}, falling back to LightGlue"
+        )
+        matches = None
+    elif matches_file.exists() and matches_tensor_file.exists():
         try:
             # Load existing matches and validate
             from sfm.utils.io_utils import load_matches
@@ -536,18 +714,12 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
         # Configure matcher based on vocabulary tree usage
         matcher_config = {
             "use_brute_force": kwargs.get("use_brute_force", True),
-            "use_vocabulary_tree": kwargs.get("use_vocab_tree", False),
-            "max_pairs_per_image": kwargs.get("max_pairs_per_image", 20),
+            "use_vocabulary_tree": False,
             "max_total_pairs": kwargs.get("max_total_pairs", None),
             "output_path": str(output_path),
         }
 
-        # If vocabulary tree was used, pass the selected pairs to the matcher
-        if kwargs.get("use_vocab_tree", False) and "image_pairs" in locals():
-            matcher_config["predefined_pairs"] = image_pairs
-            matcher_config["use_brute_force"] = (
-                False  # Force to use only predefined pairs
-            )
+        matcher_config["predefined_pairs"] = image_pairs
 
         matcher = EnhancedLightGlueMatcher(
             device=device, feature_type=feature_type, config=matcher_config
@@ -616,208 +788,6 @@ def sfm_pipeline(input_dir: str = None, output_dir: str = None, **kwargs):
             del formatted_features
 
         cleanup_gpu_memory(device, "feature matching")
-
-    # Stage 4.5: Geometric verification with Algebraic Consensus
-    logger.info("Stage 4.5: Geometric verification (Algebraic Consensus)...")
-    stage_start = time.time()
-
-    if not matches:
-        logger.warning("No matches available for geometric verification; skipping stage.")
-        stage_times["geometric_verification"] = 0.0
-        logger.info("Geometric verification skipped (0 pairs to verify).")
-    else:
-        consensus_mode = kwargs.get("consensus_mode", "hybrid")
-        tau_deg = kwargs.get("consensus_tau_deg", 17.0)
-        inlier_threshold = kwargs.get("consensus_inlier_threshold", 5.0)
-        min_ratio = kwargs.get("consensus_min_inlier_ratio", 0.1)
-        max_combos_raw = kwargs.get("consensus_max_combos", 150)
-        max_combos = None if max_combos_raw is None or max_combos_raw <= 0 else max_combos_raw
-        min_correspondences = kwargs.get("consensus_min_correspondences", 10)
-        use_orientation_filter = kwargs.get("consensus_use_orientation_filter", True)
-        use_closed_form = kwargs.get("consensus_use_closed_form", True)
-        n_trials = kwargs.get("consensus_n_trials", 100)
-        confidence = kwargs.get("consensus_confidence", 0.99)
-        min_inliers = kwargs.get("consensus_min_inliers", 3)
-        hybrid_min_ratio = kwargs.get("consensus_hybrid_min_ratio", 0.1)
-
-        logger.info(
-            "Consensus config → mode=%s, tau=%.1f°, inlier_threshold=%.2fpx, "
-            "min_ratio=%.2f, min_corr=%d, max_combos=%s, hybrid_fallback_ratio=%.2f",
-            consensus_mode,
-            tau_deg,
-            inlier_threshold,
-            min_ratio,
-            min_correspondences,
-            "unlimited" if max_combos is None else str(max_combos),
-            hybrid_min_ratio,
-        )
-
-        verifier = AlgebraicConsensus(
-            orientation_tau=np.radians(tau_deg),
-            use_orientation_filter=use_orientation_filter,
-            mode=consensus_mode,
-            n_trials=n_trials,
-            inlier_threshold=inlier_threshold,
-            confidence=confidence,
-            use_closed_form=use_closed_form,
-            max_deterministic_combinations=max_combos,
-            min_inliers=min_inliers,
-            hybrid_min_ratio=hybrid_min_ratio,
-        )
-
-        def _build_kpt_dict(feat: Dict[str, Any]) -> Dict[str, Any]:
-            data: Dict[str, Any] = {"keypoints": feat["keypoints"]}
-            if "scores" in feat and feat["scores"] is not None:
-                data["scores"] = feat["scores"]
-            if "orientations" in feat and feat["orientations"] is not None:
-                data["orientations"] = feat["orientations"]
-            return data
-
-        original_matches = matches
-        total_pairs = len(original_matches)
-        logger.info("Verifying %d matched pairs...", total_pairs)
-
-        verified_matches: Dict[Any, Any] = {}
-        verification_stats = {
-            "total_pairs": total_pairs,
-            "verified_pairs": 0,
-            "avg_inlier_ratio": 0.0,
-            "avg_runtime_ms": 0.0,
-            "avg_orientation_std_deg": 0.0,
-            "orientation_pairs": 0,
-            "fallback_pairs": 0,
-        }
-
-        for pair, match_result in tqdm(original_matches.items(), desc="Verifying matches"):
-            img1, img2 = pair
-            feat1 = features[img1]
-            feat2 = features[img2]
-
-            matches0 = match_result["matches0"]
-            valid_src_indices = np.nonzero(matches0 >= 0)[0]
-            if valid_src_indices.size < min_correspondences:
-                continue
-
-            src_keypoints = feat1["keypoints"]
-            dst_keypoints = feat2["keypoints"]
-            src_len = src_keypoints.shape[0]
-            dst_len = dst_keypoints.shape[0]
-
-            hits = []
-            for src_idx in valid_src_indices:
-                if src_idx >= src_len:
-                    continue
-                dst_idx = matches0[src_idx]
-                if 0 <= dst_idx < dst_len:
-                    hits.append((int(src_idx), int(dst_idx)))
-
-            if len(hits) < min_correspondences:
-                continue
-
-            correspondences = convert_matches_to_correspondences(
-                hits,
-                _build_kpt_dict(feat1),
-                _build_kpt_dict(feat2),
-            )
-
-            if len(correspondences) < min_correspondences:
-                continue
-
-            result = verifier.verify_pair(
-                correspondences,
-                image_shape=feat1.get("image_shape"),
-            )
-
-            if (
-                result.inlier_ratio >= min_ratio
-                and result.n_inliers >= min_correspondences
-            ):
-                verified_matches[pair] = match_result
-                verification_stats["verified_pairs"] += 1
-                verification_stats["avg_inlier_ratio"] += result.inlier_ratio
-                verification_stats["avg_runtime_ms"] += result.runtime * 1000.0
-                if result.orientation_stats and result.orientation_stats.n_samples > 0:
-                    verification_stats["avg_orientation_std_deg"] += np.degrees(
-                        result.orientation_stats.std
-                    )
-                verification_stats["orientation_pairs"] += 1
-
-                if result.method.startswith("hybrid"):
-                    verification_stats["fallback_pairs"] += 1
-            else:
-                logger.debug(
-                    "Rejected pair %s ↔ %s (ratio=%.3f, inliers=%d, certificate=%s)",
-                    img1,
-                    img2,
-                    result.inlier_ratio,
-                    result.n_inliers,
-                    result.certificate,
-                )
-
-        if verification_stats["verified_pairs"] > 0:
-            verification_stats["avg_inlier_ratio"] /= verification_stats["verified_pairs"]
-            verification_stats["avg_runtime_ms"] /= verification_stats["verified_pairs"]
-        if verification_stats["orientation_pairs"] > 0:
-            verification_stats["avg_orientation_std_deg"] /= verification_stats["orientation_pairs"]
-
-        kept = verification_stats["verified_pairs"]
-        total = verification_stats["total_pairs"]
-        logger.info("Verified %d/%d pairs (%.1f%%)", kept, total, (kept / total * 100.0) if total else 0.0)
-        logger.info(
-            "Average inlier ratio (kept): %.3f (threshold %.2f)",
-            verification_stats["avg_inlier_ratio"],
-            min_ratio,
-        )
-        logger.info(
-            "Average verification time (kept): %.2f ms per pair",
-            verification_stats["avg_runtime_ms"],
-        )
-        if verification_stats["verified_pairs"] > 0 and verification_stats["fallback_pairs"] > 0:
-            logger.info(
-                "Hybrid fallback triggered for %d kept pairs (%.1f%%)",
-                verification_stats["fallback_pairs"],
-                verification_stats["fallback_pairs"] / verification_stats["verified_pairs"] * 100.0,
-            )
-        if verification_stats["orientation_pairs"] > 0:
-            logger.info(
-                "Average orientation std among kept pairs: %.2f°",
-                verification_stats["avg_orientation_std_deg"],
-            )
-
-        verifier_stats = verifier.get_statistics()
-        if consensus_mode in {"deterministic", "hybrid"}:
-            total_combos = verifier_stats.get("n_deterministic_combos", 0)
-            call_count = verifier_stats.get("n_calls", 0)
-            avg_combos = (total_combos / call_count) if call_count else 0.0
-            logger.info(
-                "Deterministic consensus combos tried: total=%d, avg=%.1f per call",
-                total_combos,
-                avg_combos,
-            )
-        if consensus_mode in {"hybrid", "ransac"}:
-            ransac_calls = verifier_stats.get("n_ransac_calls", 0)
-            if ransac_calls:
-                logger.info("RANSAC verification calls: %d", ransac_calls)
-        if consensus_mode == "hybrid":
-            fallback_calls = verifier_stats.get("n_hybrid_fallbacks", 0)
-            if fallback_calls:
-                logger.info("Hybrid fallback triggered %d times", fallback_calls)
-
-        if kept == 0:
-            logger.warning(
-                "No pairs passed algebraic consensus. Falling back to unfiltered matches."
-            )
-            matches = original_matches
-        else:
-            matches = verified_matches
-
-        stage_times["geometric_verification"] = time.time() - stage_start
-        logger.info(
-            "Geometric verification completed in %.2fs",
-            stage_times["geometric_verification"],
-        )
-
-    cleanup_gpu_memory(device, "geometric verification")
 
     # Stage 5: COLMAP-based SfM reconstruction using binary (avoid pycolmap CUDA issues)
     logger.info("Stage 5: COLMAP-based SfM reconstruction using binary...")

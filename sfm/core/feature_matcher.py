@@ -161,10 +161,10 @@ class EnhancedLightGlueMatcher:
         # Check if predefined pairs are provided (from vocabulary tree)
         predefined_pairs = self.config.get('predefined_pairs', None)
         if predefined_pairs is not None:
-            logger.info(f"Using predefined pairs from vocabulary tree: {len(predefined_pairs)} pairs")
-            # Use GPU brute force matcher for vocab tree pairs - BEST PERFORMANCE!
+            logger.info(f"Using predefined pairs: {len(predefined_pairs)}")
+            # Use GPU brute force matcher for predefined pairs when available
             if self.gpu_brute_force_matcher is not None:
-                logger.info("Using GPU batch processing for vocab tree pairs...")
+                logger.info("Using GPU batch processing for predefined pairs...")
                 
                 # Load features to GPU memory as tensors
                 self.gpu_brute_force_matcher.load_features(features)

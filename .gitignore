@@ -10,3 +10,8 @@ CLAUDE.md
 .claude/**
 /images
 /output
+*.jpg
+/ImageInputs
+*.pyc
+/output_mpa
+/results
