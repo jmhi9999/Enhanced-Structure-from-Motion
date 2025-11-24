@@ -16,9 +16,9 @@ class PairSelectorFactory:
     """Factory for creating pair selectors."""
 
     _selectors = {
-        "exhaustive": ExhaustivePairSelector,
         "SARA": SARAPairSelector,
         "vocab_tree": VocabTreePairSelector,
+        "exhaustive": ExhaustivePairSelector,
     }
 
     @classmethod

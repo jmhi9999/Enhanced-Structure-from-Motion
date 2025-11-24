@@ -430,22 +430,114 @@ def save_matches(matches: Dict[Tuple[str, str], Any], filepath: Path):
 def load_matches(filepath: Path) -> Dict[Tuple[str, str], Any]:
     """Load matches from H5 format"""
     import h5py
-    
+
     matches = {}
     with h5py.File(filepath, 'r') as f:
         for group_name in f.keys():
             grp = f[group_name]
             img1 = grp.attrs['img1']
             img2 = grp.attrs['img2']
-            
+
             match_data = {}
             for key in grp.keys():
                 match_data[key] = grp[key][:]
-            
+
             for attr_key in grp.attrs.keys():
                 if attr_key not in ['img1', 'img2']:
                     match_data[attr_key] = grp.attrs[attr_key]
-            
+
             matches[(img1, img2)] = match_data
-    
-    return matches 
+
+    return matches
+
+
+def compute_reconstruction_statistics(
+    points3d: Dict,
+    cameras: Dict,
+    images: Dict,
+    features: Dict[str, Any] = None,
+    matches: Dict[Tuple[str, str], Any] = None,
+) -> Dict[str, Any]:
+    """
+    Compute reconstruction statistics.
+
+    Args:
+        points3d: 3D points dictionary
+        cameras: Cameras dictionary
+        images: Images dictionary
+        features: Optional features dictionary
+        matches: Optional matches dictionary
+
+    Returns:
+        Dictionary of statistics
+    """
+    stats = {}
+
+    # Basic counts
+    stats['num_cameras'] = len(cameras)
+    stats['num_images'] = len(images)
+    stats['num_registered_images'] = len(images)
+    stats['num_3d_points'] = len(points3d)
+
+    # Registration rate (assuming all images in 'images' dict are registered)
+    if features is not None:
+        total_images = len(features)
+        stats['registration_rate'] = len(images) / total_images if total_images > 0 else 0.0
+    else:
+        stats['registration_rate'] = 1.0
+
+    # Track length statistics
+    track_lengths = []
+    reprojection_errors = []
+    num_observations = 0
+
+    for point_id, point in points3d.items():
+        track = point.get('track', [])
+        track_lengths.append(len(track))
+        num_observations += len(track)
+
+        error = point.get('error', 0.0)
+        reprojection_errors.append(error)
+
+    if track_lengths:
+        stats['mean_track_length'] = float(np.mean(track_lengths))
+        stats['median_track_length'] = float(np.median(track_lengths))
+        stats['max_track_length'] = int(np.max(track_lengths))
+        stats['min_track_length'] = int(np.min(track_lengths))
+    else:
+        stats['mean_track_length'] = 0.0
+        stats['median_track_length'] = 0.0
+        stats['max_track_length'] = 0
+        stats['min_track_length'] = 0
+
+    stats['num_observations'] = num_observations
+
+    # Reprojection error statistics
+    if reprojection_errors:
+        stats['mean_reprojection_error'] = float(np.mean(reprojection_errors))
+        stats['median_reprojection_error'] = float(np.median(reprojection_errors))
+        stats['max_reprojection_error'] = float(np.max(reprojection_errors))
+        stats['min_reprojection_error'] = float(np.min(reprojection_errors))
+    else:
+        stats['mean_reprojection_error'] = 0.0
+        stats['median_reprojection_error'] = 0.0
+        stats['max_reprojection_error'] = 0.0
+        stats['min_reprojection_error'] = 0.0
+
+    # Match statistics (if available)
+    if matches is not None:
+        stats['num_pairs'] = len(matches)
+
+        match_counts = []
+        for match_data in matches.values():
+            matches0 = match_data.get('matches0', [])
+            match_counts.append(len(matches0))
+
+        if match_counts:
+            stats['avg_matches_per_pair'] = float(np.mean(match_counts))
+            stats['num_matches_total'] = int(np.sum(match_counts))
+        else:
+            stats['avg_matches_per_pair'] = 0.0
+            stats['num_matches_total'] = 0
+
+    return stats 

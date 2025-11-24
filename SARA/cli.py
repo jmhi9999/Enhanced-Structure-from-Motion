@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 import math
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
-from .config import MPAConfig
+from .config import SARAConfig
 from .dino_embed import compute_or_load_embeddings
 from .aliked_io import ensure_aliked_features
 from .candidates import knn_candidates
@@ -17,7 +17,6 @@ from .scoring import overlap_score, edge_score
 from .gpu_batch import (
     batch_mutual_nn_gpu,
     batch_parallax_gpu,
-    preload_features_to_gpu,
     clear_gpu_cache,
 )
 from .mst import maximum_spanning_tree
@@ -43,7 +42,7 @@ def _check_gpu_available() -> bool:
 
 
 def _intrinsics_from_config(
-    cfg: MPAConfig,
+    cfg: SARAConfig,
     shape: Tuple[int, int],
 ) -> np.ndarray | None:
     if not cfg.use_intrinsics:
@@ -65,38 +64,59 @@ def _feature_shape(feat: Dict[str, np.ndarray]) -> Tuple[int, int]:
     return 1080, 1920
 
 
-def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, float]]]:
-    """Execute the MPA pipeline and persist outputs."""
+def _extract_allowed_stems(cfg: SARAConfig) -> Optional[Set[str]]:
+    """Return the subset of image stems the caller wants to process, if any."""
+    extras = getattr(cfg, "extra", None) or {}
+    allowed = extras.get("allowed_image_stems")
+    if not allowed:
+        return None
+    if isinstance(allowed, (str, Path)):
+        return {_stem_from_any(allowed)}
+    stems: Set[str] = set()
+    for item in allowed:
+        stems.add(_stem_from_any(item))
+    return stems
+
+
+def _stem_from_any(value) -> str:
+    """Normalise any incoming identifier to an image stem."""
+    if isinstance(value, Path):
+        return value.stem
+    return Path(str(value)).stem
+
+
+def run_SARA(cfg: SARAConfig) -> Dict[str, List[Tuple[str, str, float, float, float]]]:
+    """Execute the SARA pipeline and persist outputs."""
+    allowed_stems = _extract_allowed_stems(cfg)
     Path(cfg.out_dir).mkdir(parents=True, exist_ok=True)
     embeddings = compute_or_load_embeddings(cfg.img_dir, cfg.out_dir, device=cfg.device)
-    features = ensure_aliked_features(cfg.img_dir, cfg.out_dir)
+    if allowed_stems is not None and embeddings:
+        embeddings = {stem: emb for stem, emb in embeddings.items() if stem in allowed_stems}
+    features = ensure_aliked_features(cfg.img_dir, cfg.out_dir, allowed_stems=allowed_stems)
 
     nodes = sorted(set(embeddings.keys()) & set(features.keys()))
     if len(nodes) < 2:
         raise RuntimeError("Need at least two images with embeddings and features.")
 
-    logger.info("MPA: computing candidate graph")
+    logger.info("SARA: computing candidate graph")
     embeds_subset = {k: embeddings[k] for k in nodes}
     candidate_edges = knn_candidates(embeds_subset, cfg.knn_k)
 
     logger.info(
-        "MPA: evaluating %d candidate edges (knn_k=%d) with GPU acceleration",
+        "SARA: evaluating %d candidate edges (knn_k=%d) with GPU acceleration",
         len(candidate_edges),
         cfg.knn_k,
     )
 
-    # GPU optimization: Preload features to GPU
+    # Check if GPU is available for batch processing
     use_gpu = cfg.use_gpu_batch and cfg.device == "cuda" and _check_gpu_available()
     if use_gpu:
-        logger.info("MPA: preloading features to GPU for faster processing")
-        import torch
-        gpu_features = preload_features_to_gpu(features, device=cfg.device)
+        logger.info("SARA: using GPU batch processing (memory-efficient mode)")
     else:
         if not cfg.use_gpu_batch:
-            logger.info("MPA: GPU batch processing disabled by config")
+            logger.info("SARA: GPU batch processing disabled by config")
         else:
-            logger.info("MPA: using CPU processing (GPU not available)")
-        gpu_features = None
+            logger.info("SARA: using CPU processing (GPU not available)")
 
     edge_stats: Dict[Tuple[str, str], Tuple[float, float, float]] = {}
     all_weighted_edges: List[Tuple[str, str, float]] = []
@@ -107,28 +127,19 @@ def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, floa
     feature_data = []
 
     for si, sj in candidate_edges:
-        fa = gpu_features[si] if gpu_features else features[si]
-        fb = gpu_features[sj] if gpu_features else features[sj]
+        fa = features[si]
+        fb = features[sj]
 
-        # Get descriptors (handle both tensor and numpy)
-        if gpu_features:
-            import torch
-            desc_a = fa.get("desc", fa.get("descriptors"))
-            desc_b = fb.get("desc", fb.get("descriptors"))
-            if isinstance(desc_a, torch.Tensor):
-                desc_a = desc_a.cpu().numpy()
-            if isinstance(desc_b, torch.Tensor):
-                desc_b = desc_b.cpu().numpy()
-        else:
-            desc_a = fa.get("desc", fa.get("descriptors"))
-            desc_b = fb.get("desc", fb.get("descriptors"))
+        # Get descriptors (always numpy for memory efficiency)
+        desc_a = fa.get("desc", fa.get("descriptors"))
+        desc_b = fb.get("desc", fb.get("descriptors"))
 
         desc_pairs.append((desc_a, desc_b))
         pair_keys.append((si, sj))
         feature_data.append((fa, fb))
 
     # Batch GPU mutual NN
-    logger.info(f"MPA: computing mutual nearest neighbors (GPU batch, metric={cfg.descriptor_metric})")
+    logger.info(f"SARA: computing mutual nearest neighbors (GPU batch, metric={cfg.descriptor_metric})")
     if use_gpu:
         mutual_results = batch_mutual_nn_gpu(
             desc_pairs,
@@ -148,7 +159,7 @@ def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, floa
     ransac_data = []
     ransac_indices = []
     # Store matches for optional export
-    mpa_matches: Dict[Tuple[str, str], Dict] = {}
+    sara_matches: Dict[Tuple[str, str], Dict] = {}
 
     for idx, ((si, sj), (idx_a, idx_b), (fa, fb)) in enumerate(
         zip(pair_keys, mutual_results, feature_data)
@@ -156,18 +167,9 @@ def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, floa
         if len(idx_a) < cfg.min_nn_for_ransac:
             continue
 
-        # Get keypoints
-        if gpu_features:
-            import torch
-            kpts_a = fa.get("kpt", fa.get("keypoints"))
-            kpts_b = fb.get("kpt", fb.get("keypoints"))
-            if isinstance(kpts_a, torch.Tensor):
-                kpts_a = kpts_a.cpu().numpy()
-            if isinstance(kpts_b, torch.Tensor):
-                kpts_b = kpts_b.cpu().numpy()
-        else:
-            kpts_a = fa.get("kpt", fa.get("keypoints"))
-            kpts_b = fb.get("kpt", fb.get("keypoints"))
+        # Get keypoints (always numpy for memory efficiency)
+        kpts_a = fa.get("kpt", fa.get("keypoints"))
+        kpts_b = fb.get("kpt", fb.get("keypoints"))
 
         ptsA = kpts_a[idx_a]
         ptsB = kpts_b[idx_b]
@@ -176,7 +178,7 @@ def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, floa
         ransac_indices.append((si, sj))
 
     # RANSAC (still CPU, but could be optimized with kornia)
-    logger.info(f"MPA: running RANSAC on {len(ransac_data)} valid pairs")
+    logger.info(f"SARA: running RANSAC on {len(ransac_data)} valid pairs")
 
     pts_pairs = []
     inliers_list = []
@@ -218,7 +220,7 @@ def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, floa
         # Create scores based on descriptor similarity (use uniform scores for now)
         scores = np.ones(len(inlier_idx_a), dtype=np.float32)
 
-        mpa_matches[(si, sj)] = {
+        sara_matches[(si, sj)] = {
             'keypoints0': kpts_a.astype(np.float32),
             'keypoints1': kpts_b.astype(np.float32),
             'matches0': inlier_idx_a.astype(np.int32),
@@ -230,7 +232,7 @@ def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, floa
         }
 
     # Batch GPU parallax computation
-    logger.info(f"MPA: computing parallax (GPU batch) for {len(pts_pairs)} pairs")
+    logger.info(f"SARA: computing parallax (GPU batch) for {len(pts_pairs)} pairs")
     if use_gpu:
         parallax_results = batch_parallax_gpu(
             pts_pairs,
@@ -250,13 +252,13 @@ def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, floa
         ]
 
     # Compute final scores - now indices match!
-    logger.info(f"MPA: computing final scores for {len(valid_pair_indices)} pairs")
+    logger.info(f"SARA: computing final scores for {len(valid_pair_indices)} pairs")
 
     filtered_by_score = 0
     for (si, sj), parallax in zip(valid_pair_indices, parallax_results):
         key = tuple(sorted((si, sj)))
         if key not in edge_stats:
-            logger.warning(f"MPA: key {key} not in edge_stats (should not happen)")
+            logger.warning(f"SARA: key {key} not in edge_stats (should not happen)")
             continue
 
         _, overlap, _ = edge_stats[key]
@@ -268,6 +270,7 @@ def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, floa
             cfg.beta,
             cfg.tau_overlap,
             cfg.tau_parallax,
+            cfg.scoring_mode,
         )
 
         if score <= 0.0 or not math.isfinite(score):
@@ -278,79 +281,87 @@ def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, floa
         edge_stats[key] = (score, overlap, parallax)
         all_weighted_edges.append((si, sj, score))
 
-    logger.info(f"MPA: {len(all_weighted_edges)} edges passed all filters")
-    logger.info(f"MPA: {filtered_by_score} edges filtered by score thresholds")
+    logger.info(f"SARA: {len(all_weighted_edges)} edges passed all filters")
+    logger.info(f"SARA: {filtered_by_score} edges filtered by score thresholds")
 
     # Clear GPU cache
     if use_gpu:
         clear_gpu_cache(cfg.device)
-        del gpu_features
 
     if len(all_weighted_edges) < len(nodes) - 1:
-        logger.error(f"MPA: Not enough edges! Need {len(nodes) - 1}, got {len(all_weighted_edges)}")
-        logger.error(f"MPA: Consider lowering thresholds: tau_overlap={cfg.tau_overlap}, tau_parallax={cfg.tau_parallax}")
+        logger.error(f"SARA: Not enough edges! Need {len(nodes) - 1}, got {len(all_weighted_edges)}")
+        logger.error(f"SARA: Consider lowering thresholds: tau_overlap={cfg.tau_overlap}, tau_parallax={cfg.tau_parallax}")
         raise RuntimeError(
             f"Not enough valid edges to build MST. "
             f"Need {len(nodes) - 1} edges but only have {len(all_weighted_edges)}. "
-            f"Try lowering --mpa_tau_overlap (current: {cfg.tau_overlap}) or "
-            f"--mpa_tau_parallax (current: {cfg.tau_parallax})"
+            f"Try lowering --sara_tau_overlap (current: {cfg.tau_overlap}) or "
+            f"--sara_tau_parallax (current: {cfg.tau_parallax})"
         )
 
     # Stage 1: MST (base connectivity)
-    logger.info("MPA: building maximum spanning tree")
+    logger.info("SARA: building maximum spanning tree")
     mst_edges = maximum_spanning_tree(nodes, all_weighted_edges)
-    logger.info(f"MPA: MST has {len(mst_edges)} edges")
+    logger.info(f"SARA: MST has {len(mst_edges)} edges")
 
-    # Stage 2: Leaf augmentation (standard)
-    logger.info("MPA: augmenting leaf nodes")
-    current_edges = leaf_augment(nodes, all_weighted_edges, mst_edges, cfg.deg_cap)
-    logger.info(f"MPA: after leaf augmentation: {len(current_edges)} edges")
+    # Apply graph construction mode
+    if cfg.graph_construction_mode == "mst_only":
+        logger.info("SARA: using MST only (ablation mode)")
+        current_edges = mst_edges
+    elif cfg.graph_construction_mode == "mst_leaf":
+        logger.info("SARA: using MST + Leaf augmentation (ablation mode)")
+        current_edges = leaf_augment(nodes, all_weighted_edges, mst_edges, cfg.deg_cap)
+        logger.info(f"SARA: after leaf augmentation: {len(current_edges)} edges")
+    else:  # "full" mode
+        # Stage 2: Leaf augmentation (standard)
+        logger.info("SARA: augmenting leaf nodes")
+        current_edges = leaf_augment(nodes, all_weighted_edges, mst_edges, cfg.deg_cap)
+        logger.info(f"SARA: after leaf augmentation: {len(current_edges)} edges")
 
-    # Stage 3: Weak-view reinforcement (if enabled)
-    if cfg.enable_weak_view_reinforcement:
-        logger.info("MPA: reinforcing weak views")
-        current_edges = reinforce_weak_views(
-            nodes,
-            all_weighted_edges,
-            current_edges,
-            features,
-            cfg.weak_view_percentile,
-            cfg.weak_view_extra_edges,
-        )
-        logger.info(f"MPA: after weak-view reinforcement: {len(current_edges)} edges")
+        # Stage 3: Weak-view reinforcement (if enabled)
+        if cfg.enable_weak_view_reinforcement:
+            logger.info("SARA: reinforcing weak views")
+            current_edges = reinforce_weak_views(
+                nodes,
+                all_weighted_edges,
+                current_edges,
+                features,
+                cfg.weak_view_percentile,
+                cfg.weak_view_extra_edges,
+            )
+            logger.info(f"SARA: after weak-view reinforcement: {len(current_edges)} edges")
 
-    # Stage 4: Multi-scale loop augmentation (if enabled)
-    budget = int(math.ceil(cfg.loop_budget_per_node * len(nodes)))
-    if cfg.enable_multi_scale_loops:
-        logger.info(f"MPA: adding multi-scale loops (budget={budget})")
-        current_edges = multi_scale_loop_augmentation(
-            nodes,
-            all_weighted_edges,
-            current_edges,
-            budget,
-            cfg.small_loop_ratio,
-            cfg.medium_loop_ratio,
-            cfg.large_loop_ratio,
-        )
-        logger.info(f"MPA: after multi-scale loops: {len(current_edges)} edges")
-    else:
-        # Fallback to original triangle gain augmentation
-        logger.info(f"MPA: adding loops via triangle gain (budget={budget})")
-        current_edges = triangle_gain_augment(nodes, all_weighted_edges, current_edges, budget)
-        logger.info(f"MPA: after loop augmentation: {len(current_edges)} edges")
+        # Stage 4: Multi-scale loop augmentation (if enabled)
+        budget = int(math.ceil(cfg.loop_budget_per_node * len(nodes)))
+        if cfg.enable_multi_scale_loops:
+            logger.info(f"SARA: adding multi-scale loops (budget={budget})")
+            current_edges = multi_scale_loop_augmentation(
+                nodes,
+                all_weighted_edges,
+                current_edges,
+                budget,
+                cfg.small_loop_ratio,
+                cfg.medium_loop_ratio,
+                cfg.large_loop_ratio,
+            )
+            logger.info(f"SARA: after multi-scale loops: {len(current_edges)} edges")
+        else:
+            # Fallback to original triangle gain augmentation
+            logger.info(f"SARA: adding loops via triangle gain (budget={budget})")
+            current_edges = triangle_gain_augment(nodes, all_weighted_edges, current_edges, budget)
+            logger.info(f"SARA: after loop augmentation: {len(current_edges)} edges")
 
-    # Stage 5: Long-baseline anchors (if enabled)
-    if cfg.enable_long_baseline_anchors:
-        logger.info("MPA: adding long-baseline anchors")
-        current_edges = add_long_baseline_anchors(
-            nodes,
-            all_weighted_edges,
-            current_edges,
-            embeddings,
-            cfg.anchor_count,
-            cfg.anchor_percentile,
-        )
-        logger.info(f"MPA: after anchors: {len(current_edges)} edges")
+        # Stage 5: Long-baseline anchors (if enabled)
+        if cfg.enable_long_baseline_anchors:
+            logger.info("SARA: adding long-baseline anchors")
+            current_edges = add_long_baseline_anchors(
+                nodes,
+                all_weighted_edges,
+                current_edges,
+                embeddings,
+                cfg.anchor_count,
+                cfg.anchor_percentile,
+            )
+            logger.info(f"SARA: after anchors: {len(current_edges)} edges")
 
     # Build final pairs with metadata
     final_pairs = []
@@ -365,9 +376,9 @@ def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, floa
         Path(cfg.out_dir) / cfg.matcher_pairs_filename,
     )
 
-    # Save MPA matches if any were computed
-    if mpa_matches:
-        logger.info(f"MPA: saving {len(mpa_matches)} matches to mpa_matches.h5")
+    # Save SARA matches if any were computed
+    if sara_matches:
+        logger.info(f"SARA: saving {len(sara_matches)} matches to sara_matches.h5")
         try:
             # Import save function from sfm.utils.io_utils
             import sys
@@ -378,11 +389,11 @@ def run_mpa(cfg: MPAConfig) -> Dict[str, List[Tuple[str, str, float, float, floa
                 sys.path.insert(0, str(parent_dir))
 
             from sfm.utils.io_utils import save_matches
-            save_matches(mpa_matches, Path(cfg.out_dir) / "mpa_matches.h5")
-            logger.info("MPA: matches saved successfully")
+            save_matches(sara_matches, Path(cfg.out_dir) / "sara_matches.h5")
+            logger.info("SARA: matches saved successfully")
         except ImportError as e:
-            logger.warning(f"MPA: Could not save matches (import error): {e}")
+            logger.warning(f"SARA: Could not save matches (import error): {e}")
         except Exception as e:
-            logger.warning(f"MPA: Could not save matches: {e}")
+            logger.warning(f"SARA: Could not save matches: {e}")
 
-    return {"pairs": final_pairs, "matches": mpa_matches}
+    return {"pairs": final_pairs, "matches": sara_matches}

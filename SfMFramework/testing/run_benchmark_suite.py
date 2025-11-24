@@ -3,7 +3,7 @@
 Sequentially run ground-truth benchmarks across multiple scenes and extractor/pair-selector combos.
 
 Example:
-    python -m matching_framework.testing.run_benchmark_suite \
+    python -m SfMFramework.testing.run_benchmark_suite \
         --images-root ImageInputs \
         --output-root results/benchmark_suite \
         --colmap-min-shared-points 1000
@@ -21,8 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Set
 
-from matching_framework.extractors import ExtractorFactory
-from matching_framework.pair_selectors import PairSelectorFactory
+from SfMFramework.extractors import ExtractorFactory
+from SfMFramework.pair_selectors import PairSelectorFactory
 
 logger = logging.getLogger("benchmark_suite")
 
@@ -56,7 +56,7 @@ def decide_matcher(extractor: str, learned_extractors: Set[str]) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Automate matching_framework.testing.benchmark over multiple scenes.",
+        description="Automate SfMFramework.testing.benchmark over multiple scenes.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -233,7 +233,7 @@ def main() -> None:
                 cmd = [
                     sys.executable,
                     "-m",
-                    "matching_framework.testing.benchmark",
+                    "SfMFramework.testing.benchmark",
                     "--dataset",
                     "colmap_scene",
                     "--dataset_path",

@@ -6,8 +6,8 @@ from typing import Optional
 
 
 @dataclass(slots=True)
-class MPAConfig:
-    """Configuration container for the MPA pair selection pipeline."""
+class SARAConfig:
+    """Configuration container for the SARA pair selection pipeline."""
 
     img_dir: str
     out_dir: str
@@ -28,6 +28,10 @@ class MPAConfig:
 
     loop_budget_per_node: float = 0.5
     deg_cap: Optional[int] = 6
+
+    # Ablation study modes
+    graph_construction_mode: str = "full"  # "mst_only", "mst_leaf", "full"
+    scoring_mode: str = "combined"  # "overlap_only", "parallax_only", "combined"
 
     # Advanced augmentation strategies
     enable_multi_scale_loops: bool = True
@@ -52,7 +56,7 @@ class MPAConfig:
     device: str = "cuda"
 
     # GPU optimization settings
-    use_gpu_batch: bool = True  # Use GPU batch processing for mutual NN and parallax
+    use_gpu_batch: bool = True  # Use GPU batch processing for mutual NN and parallax (disable to save RAM)
     gpu_batch_size_mutual_nn: int = 128  # Batch size for mutual NN on GPU
     gpu_batch_size_parallax: int = 256  # Batch size for parallax on GPU
 

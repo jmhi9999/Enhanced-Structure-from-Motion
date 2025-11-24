@@ -388,6 +388,9 @@ def _select_pairs_with_SARA(
         device=kwargs.get("SARA_device", "cuda"),
     )
 
+    cfg.extra = dict(getattr(cfg, "extra", {}) or {})
+    cfg.extra["allowed_image_stems"] = [Path(p).stem for p in image_paths]
+
     result = run_SARA(cfg)
     stem_to_path = {Path(p).stem: p for p in image_paths}
 

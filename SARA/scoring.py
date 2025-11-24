@@ -17,9 +17,27 @@ def edge_score(
     beta: float,
     tau_overlap: float,
     tau_parallax: float,
+    scoring_mode: str = "combined",
 ) -> float:
-    """Combine overlap and parallax with thresholds and exponents."""
+    """Combine overlap and parallax with thresholds and exponents.
+
+    Args:
+        overlap: Overlap score (0-1)
+        parallax: Parallax score (0-1)
+        alpha: Exponent for overlap
+        beta: Exponent for parallax
+        tau_overlap: Minimum overlap threshold
+        tau_parallax: Minimum parallax threshold
+        scoring_mode: "overlap_only", "parallax_only", or "combined"
+    """
     if overlap < tau_overlap or parallax < tau_parallax:
         return 0.0
-    score = (overlap ** alpha) * (parallax ** beta)
+
+    if scoring_mode == "overlap_only":
+        score = overlap ** alpha
+    elif scoring_mode == "parallax_only":
+        score = parallax ** beta
+    else:  # "combined"
+        score = (overlap ** alpha) * (parallax ** beta)
+
     return float(score)

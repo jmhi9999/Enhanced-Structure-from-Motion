@@ -6,7 +6,7 @@ This script reads multiple statistics.csv files from different reconstruction
 runs and creates a comparison table for easy analysis.
 
 Usage:
-    python -m matching_framework.testing.compare_reconstructions \
+    python -m SfMFramework.testing.compare_reconstructions \
         results/exp1/statistics.csv \
         results/exp2/statistics.csv \
         results/exp3/statistics.csv \
@@ -14,20 +14,20 @@ Usage:
 
 Example:
     # Run multiple experiments
-    python -m matching_framework.sfm_pipeline \
+    python -m SfMFramework.sfm_pipeline \
         --images data/temple --output results/sp_lg \
         --extractor superpoint --matcher lightglue
 
-    python -m matching_framework.sfm_pipeline \
+    python -m SfMFramework.sfm_pipeline \
         --images data/temple --output results/sift_nn \
         --extractor sift --matcher nn
 
-    python -m matching_framework.sfm_pipeline \
+    python -m SfMFramework.sfm_pipeline \
         --images data/temple --output results/orb_nn \
         --extractor orb --matcher nn
 
     # Compare results
-    python -m matching_framework.testing.compare_reconstructions \
+    python -m SfMFramework.testing.compare_reconstructions \
         results/sp_lg/statistics.csv \
         results/sift_nn/statistics.csv \
         results/orb_nn/statistics.csv \

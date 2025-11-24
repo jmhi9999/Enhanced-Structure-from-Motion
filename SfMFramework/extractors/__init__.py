@@ -2,7 +2,6 @@
 
 from .base import BaseFeatureExtractor, ExtractorConfig, FeatureData
 from .sift import SIFTExtractor
-from .orb import ORBExtractor
 from .superpoint import SuperPointExtractor
 from .aliked import ALIKEDExtractor
 from .disk import DISKExtractor
@@ -19,11 +18,10 @@ class ExtractorFactory:
     """Factory for creating feature extractors."""
 
     _extractors = {
-        "sift": SIFTExtractor,
-        "orb": ORBExtractor,
         "superpoint": SuperPointExtractor,
         "aliked": ALIKEDExtractor,
         "disk": DISKExtractor,
+        "sift": SIFTExtractor,
     }
 
     @classmethod

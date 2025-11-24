@@ -3,7 +3,7 @@
 Automate SfM reconstruction and ground-truth benchmarking across multiple scenes.
 
 Example:
-    python -m matching_framework.testing.run_colmap_suite \
+    python -m SfMFramework.testing.run_colmap_suite \
         --images-root ImageInputs \
         --output-root results/colmap_suite \
         --device cuda \
@@ -440,7 +440,7 @@ def main() -> None:
                         cmd = [
                             sys.executable,
                             "-m",
-                            "matching_framework.sfm_pipeline",
+                            "SfMFramework.sfm_pipeline",
                             "--images",
                             str(images_dir),
                             "--output",
@@ -458,7 +458,8 @@ def main() -> None:
                         ]
                         if args.resize_max:
                             cmd.extend(["--resize_max", str(args.resize_max)])
-                        if args.pipeline_use_magsac:
+                        # Disable MAGSAC for SIFT (too aggressive, causes reconstruction failure)
+                        if args.pipeline_use_magsac and extractor != "sift":
                             cmd.append("--use_magsac_filtering")
 
                         rc = run_command(cmd, args.dry_run, cwd=Path.cwd())
@@ -474,7 +475,7 @@ def main() -> None:
                     cmd = [
                         sys.executable,
                         "-m",
-                        "matching_framework.testing.benchmark",
+                        "SfMFramework.testing.benchmark",
                         "--dataset",
                         "colmap_scene",
                         "--dataset_path",
@@ -500,7 +501,8 @@ def main() -> None:
                         cmd.extend(["--max_keypoints", str(args.max_keypoints)])
                     if args.resize_max:
                         cmd.extend(["--resize_max", str(args.resize_max)])
-                    if args.benchmark_use_magsac:
+                    # Disable MAGSAC for SIFT (too aggressive, causes reconstruction failure)
+                    if args.benchmark_use_magsac and extractor != "sift":
                         cmd.append("--use_magsac_filtering")
 
                     rc = run_command(cmd, args.dry_run, cwd=Path.cwd())

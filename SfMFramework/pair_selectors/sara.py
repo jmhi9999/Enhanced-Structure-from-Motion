@@ -56,8 +56,18 @@ class SARAPairSelector(BasePairSelector):
                 tau_parallax=self.config.extra.get("tau_parallax", 0.05),
                 loop_budget_per_node=self.config.extra.get("loop_budget_per_node", 0.5),
                 descriptor_metric=self.config.extra.get("descriptor_metric", "cosine"),
+                graph_construction_mode=self.config.extra.get("graph_construction_mode", "full"),
+                scoring_mode=self.config.extra.get("scoring_mode", "combined"),
+                alpha=self.config.extra.get("alpha", 1.0),
+                beta=self.config.extra.get("beta", 1.0),
+                # Augmentation layer toggles
+                enable_multi_scale_loops=self.config.extra.get("enable_multi_scale_loops", True),
+                enable_long_baseline_anchors=self.config.extra.get("enable_long_baseline_anchors", True),
+                enable_weak_view_reinforcement=self.config.extra.get("enable_weak_view_reinforcement", True),
                 device=self.config.device,
             )
+            cfg.extra = dict(getattr(cfg, "extra", {}) or {})
+            cfg.extra["allowed_image_stems"] = [path.stem for path in image_list]
 
             # Export features to SARA format
             self._export_features_for_SARA(features, Path(out_dir))

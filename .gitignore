@@ -15,3 +15,4 @@ CLAUDE.md
 *.pyc
 /output_mpa
 /results
+/temp

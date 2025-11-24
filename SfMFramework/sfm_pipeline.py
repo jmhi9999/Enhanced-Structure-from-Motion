@@ -1,36 +1,36 @@
 #!/usr/bin/env python3
 """
-SfM Reconstruction Pipeline using matching_framework components.
+SfM Reconstruction Pipeline using SfMFramework components.
 
 This script performs complete Structure-from-Motion reconstruction on a folder
 of images using modular extractors, matchers, and pair selectors from
-matching_framework. It collects reconstruction statistics (even without ground truth)
+SfMFramework. It collects reconstruction statistics (even without ground truth)
 and exports results to CSV for comparison.
 
 Usage:
-    python -m matching_framework.sfm_pipeline \
+    python -m SfMFramework.sfm_pipeline \
         --images data/images \
         --output results/reconstruction \
         --extractor superpoint \
         --matcher lightglue \
-        --pair_selector mpa \
+        --pair_selector SARA \
         --device cuda
 
 Compare different configurations:
-    # Run 1: SuperPoint + LightGlue + MPA
-    python -m matching_framework.sfm_pipeline \
+    # Run 1: SuperPoint + LightGlue + SARA
+    python -m SfMFramework.sfm_pipeline \
         --images data/temple \
         --output results/temple_sp_lg \
-        --extractor superpoint --matcher lightglue --pair_selector mpa
+        --extractor superpoint --matcher lightglue --pair_selector SARA
 
     # Run 2: SIFT + NN + Exhaustive
-    python -m matching_framework.sfm_pipeline \
+    python -m SfMFramework.sfm_pipeline \
         --images data/temple \
         --output results/temple_sift_nn \
         --extractor sift --matcher nn --pair_selector exhaustive
 
     # Compare results
-    python -m matching_framework.testing.compare_reconstructions \
+    python -m SfMFramework.testing.compare_reconstructions \
         results/temple_sp_lg/statistics.csv \
         results/temple_sift_nn/statistics.csv
 """
@@ -44,15 +44,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import cv2
-import sys
 
-# Add parent directory
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).parent.parent))  # For sfm module
-
-from extractors import ExtractorFactory, ExtractorConfig
-from matchers import MatcherFactory, MatcherConfig
-from pair_selectors import PairSelectorFactory, PairSelectorConfig
+from SfMFramework.extractors import ExtractorFactory, ExtractorConfig
+from SfMFramework.matchers import MatcherFactory, MatcherConfig
+from SfMFramework.pair_selectors import PairSelectorFactory, PairSelectorConfig
 
 # Import COLMAP reconstruction functions from existing sfm module
 from sfm.core.colmap_binary import (
@@ -69,7 +64,7 @@ logger = logging.getLogger(__name__)
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="SfM reconstruction pipeline using matching_framework",
+        description="SfM reconstruction pipeline using SfMFramework",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
@@ -86,7 +81,7 @@ def parse_args():
         help="Feature extractor"
     )
     parser.add_argument("--max_keypoints", type=int, default=4096, help="Max keypoints per image")
-    parser.add_argument("--resize_max", type=int, default=None, help="Resize max dimension")
+    parser.add_argument("--resize_max", type=int, default=1600, help="Resize max dimension")
 
     # Matcher
     parser.add_argument(
@@ -200,14 +195,31 @@ def filter_matches_with_magsac(
     matched_kpts0 = kpts0[match_indices[:, 0]]
     matched_kpts1 = kpts1[match_indices[:, 1]]
 
-    F_matrix, inlier_mask = cv2.findFundamentalMat(
-        matched_kpts0.astype(np.float32),
-        matched_kpts1.astype(np.float32),
-        method=cv2.USAC_MAGSAC,
-        ransacReprojThreshold=threshold,
-        confidence=confidence,
-        maxIters=max_iters,
-    )
+    # Validate input points
+    if not np.all(np.isfinite(matched_kpts0)) or not np.all(np.isfinite(matched_kpts1)):
+        logger.warning("MAGSAC: Found NaN/Inf in keypoints, skipping pair")
+        return np.array([]).reshape(0, 2)
+
+    # Check for degenerate configuration (all points too close)
+    if matched_kpts0.shape[0] > 0:
+        std0 = np.std(matched_kpts0, axis=0)
+        std1 = np.std(matched_kpts1, axis=0)
+        if np.any(std0 < 1.0) or np.any(std1 < 1.0):
+            logger.warning("MAGSAC: Degenerate point configuration (points too close), skipping pair")
+            return np.array([]).reshape(0, 2)
+
+    try:
+        F_matrix, inlier_mask = cv2.findFundamentalMat(
+            matched_kpts0.astype(np.float32),
+            matched_kpts1.astype(np.float32),
+            method=cv2.USAC_MAGSAC,
+            ransacReprojThreshold=threshold,
+            confidence=confidence,
+            maxIters=max_iters,
+        )
+    except cv2.error as e:
+        logger.warning(f"MAGSAC: OpenCV error during fundamental matrix estimation: {e}")
+        return np.array([]).reshape(0, 2)
 
     if F_matrix is None or inlier_mask is None:
         return np.array([]).reshape(0, 2)
@@ -647,11 +659,11 @@ def run_reconstruction_pipeline(args) -> Dict:
         try:
             # Determine COLMAP parameters based on matcher/pair_selector
             # Exhaustive: speed-focused (many pairs, need fast processing)
-            # MPA + learning: strict parameters (high quality matches)
-            # Others: lenient parameters
+            # SARA + learning: optimized for quality and speed
+            # Others: balanced parameters
             is_exhaustive = args.pair_selector == 'exhaustive'
             is_learning_based = args.extractor in ['superpoint', 'aliked', 'disk']
-            is_mpa = args.pair_selector == 'mpa'
+            is_sara = args.pair_selector == 'SARA'
 
             if is_exhaustive:
                 # Speed-focused parameters for exhaustive matching (many pairs!)
@@ -660,26 +672,23 @@ def run_reconstruction_pipeline(args) -> Dict:
                     'speed_mode': True,  # Use speed-focused BA iterations
                 }
                 logger.info("Using speed-focused COLMAP parameters (exhaustive matching)")
-            elif is_learning_based and is_mpa:
-                # Strict parameters for high-quality matches
+            elif is_learning_based and is_sara:
+                # Optimized for SARA + learned features (high quality pairs, sub-pixel accuracy)
                 colmap_params = {
-                    'min_num_matches': args.colmap_min_matches if args.colmap_min_matches else 15,
-                    'abs_pose_min_inliers': 20,
-                    'abs_pose_min_inlier_ratio': 0.20,
-                    'init_min_tri_angle': 3.0,
-                    'tri_min_angle': 1.5,
+                    'min_num_matches': args.colmap_min_matches if args.colmap_min_matches else 8,
+                    'speed_mode': True,  # Use speed-focused BA iterations
                 }
-                logger.info("Using strict COLMAP parameters (learning-based + MPA)")
+                logger.info("Using optimized COLMAP parameters (learning-based + SARA: fast & accurate)")
             else:
-                # Lenient parameters for other cases
+                # Balanced parameters for other cases
                 colmap_params = {
                     'min_num_matches': args.colmap_min_matches if args.colmap_min_matches else 10,
                     'abs_pose_min_inliers': 15,
                     'abs_pose_min_inlier_ratio': 0.15,
-                    'init_min_tri_angle': 2.0,
-                    'tri_min_angle': 1.0,
+                    'init_min_tri_angle': 3.0,  # Slightly increased from 2.0
+                    'tri_min_angle': 1.5,  # Increased from 1.0
                 }
-                logger.info("Using lenient COLMAP parameters")
+                logger.info("Using balanced COLMAP parameters")
 
             # Run COLMAP reconstruction with appropriate parameters
             # Note: This function applies MAGSAC filtering internally

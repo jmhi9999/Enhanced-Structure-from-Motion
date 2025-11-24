@@ -3,7 +3,7 @@
 Benchmark script for evaluating feature matching on standard datasets.
 
 Usage:
-    python -m matching_framework.testing.benchmark \
+    python -m SfMFramework.testing.benchmark \
         --dataset eth3d \
         --dataset_path data/eth3d \
         --extractor superpoint \
@@ -18,17 +18,13 @@ from pathlib import Path
 from typing import Dict, List
 import numpy as np
 from tqdm import tqdm
-import sys
 import cv2
 
-# Add parent directory
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from extractors import ExtractorFactory, ExtractorConfig
-from matchers import MatcherFactory, MatcherConfig
-from pair_selectors import PairSelectorFactory, PairSelectorConfig
-from testing.datasets import DatasetFactory
-from testing.metrics import evaluate_matches, evaluate_pose
+from SfMFramework.extractors import ExtractorFactory, ExtractorConfig
+from SfMFramework.matchers import MatcherFactory, MatcherConfig
+from SfMFramework.pair_selectors import PairSelectorFactory, PairSelectorConfig
+from SfMFramework.testing.datasets import DatasetFactory
+from SfMFramework.testing.metrics import evaluate_matches, evaluate_pose
 
 logging.basicConfig(
     level=logging.INFO,
@@ -210,7 +206,7 @@ def run_benchmark(args) -> Dict:
         if key_reverse not in ground_truth_lookup:
             # Create reversed sample with inverted transformation
             T_1to0 = np.linalg.inv(sample.T_0to1)
-            from testing.datasets import DatasetSample
+            from SfMFramework.testing.datasets import DatasetSample
             reversed_sample = DatasetSample(
                 image0=sample.image1,
                 image1=sample.image0,

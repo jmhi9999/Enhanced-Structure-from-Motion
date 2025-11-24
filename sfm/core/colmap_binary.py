@@ -257,7 +257,8 @@ def create_colmap_database(features: Dict[str, Any], matches: Dict[Tuple[str, st
 
 
 def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path,
-                      mapper_params: Optional[Dict] = None, timeout: int = 1200) -> bool:
+                      mapper_params: Optional[Dict] = None, timeout: int = 1200,
+                      num_images: Optional[int] = None) -> bool:
     """Run COLMAP using binary executable
 
     Args:
@@ -266,6 +267,7 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path,
         output_path: Output directory
         mapper_params: Optional mapper parameters (min_num_matches, etc.)
         timeout: Timeout in seconds (default: 1200 = 20 minutes)
+        num_images: Number of images in dataset (for dynamic parameter tuning)
 
     Returns:
         True if successful, False otherwise
@@ -278,6 +280,47 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path,
     mapper_params = mapper_params or {}
     speed_mode = mapper_params.pop('speed_mode', False)
 
+    # Get number of images for dynamic tuning
+    if num_images is None:
+        # Try to read from database
+        try:
+            conn = sqlite3.connect(database_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM images")
+            num_images = cursor.fetchone()[0]
+            conn.close()
+        except:
+            num_images = 100  # Default fallback
+
+    # Dynamic parameter tuning based on dataset size
+    if num_images <= 50:
+        ba_images_ratio = 1.1
+        ba_points_ratio = 1.1
+        ba_local_iters = 25
+        ba_global_iters = 50
+        scale = "small"
+    elif num_images <= 200:
+        ba_images_ratio = 1.3
+        ba_points_ratio = 1.3
+        ba_local_iters = 20
+        ba_global_iters = 40
+        scale = "medium"
+    elif num_images <= 500:
+        ba_images_ratio = 1.5
+        ba_points_ratio = 1.5
+        ba_local_iters = 18
+        ba_global_iters = 30
+        scale = "large"
+    else:  # 500+
+        ba_images_ratio = 2.0
+        ba_points_ratio = 2.0
+        ba_local_iters = 15
+        ba_global_iters = 25
+        scale = "very large"
+
+    logger.info(f"Dataset scale: {scale} ({num_images} images)")
+    logger.info(f"Dynamic BA params: images_ratio={ba_images_ratio}, local_iters={ba_local_iters}, global_iters={ba_global_iters}")
+
     if speed_mode:
         # Speed-focused parameters (for exhaustive matching with many pairs)
         logger.info(f"Running COLMAP incremental mapping in SPEED MODE (timeout={timeout}s)...")
@@ -289,13 +332,13 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path,
             "--image_path", str(image_dir),
             "--output_path", str(sparse_path),
             "--Mapper.num_threads", str(multiprocessing.cpu_count()),
-            "--Mapper.ba_local_max_num_iterations", "20",  # Reduced from 40
-            "--Mapper.ba_global_max_num_iterations", "35",  # Reduced from 100
+            "--Mapper.ba_local_max_num_iterations", str(ba_local_iters),
+            "--Mapper.ba_global_max_num_iterations", str(ba_global_iters),
             "--Mapper.max_num_models", "1",
             "--Mapper.max_model_overlap", "15",
             "--Mapper.min_num_matches", str(mapper_params.get('min_num_matches', 8)),
-            "--Mapper.ba_global_images_ratio", "1.2",
-            "--Mapper.ba_global_points_ratio", "1.2"
+            "--Mapper.ba_global_images_ratio", str(ba_images_ratio),
+            "--Mapper.ba_global_points_ratio", str(ba_points_ratio)
         ]
     else:
         # Default parameters (lenient for general use)
@@ -323,30 +366,30 @@ def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path,
             # Threading: Auto-detect CPU cores
             "--Mapper.num_threads", str(multiprocessing.cpu_count()),
 
-            # BA iterations
-            "--Mapper.ba_local_max_num_iterations", "40",
-            "--Mapper.ba_global_max_num_iterations", "100",
+            # BA iterations (dynamically adjusted based on dataset size)
+            "--Mapper.ba_local_max_num_iterations", str(ba_local_iters),
+            "--Mapper.ba_global_max_num_iterations", str(ba_global_iters),
 
-            # Matching thresholds (configurable)
-            "--Mapper.min_num_matches", str(params['min_num_matches']),
-            "--Mapper.abs_pose_min_num_inliers", str(params.get('abs_pose_min_inliers', 15)),
+            # Matching thresholds (configurable, optimized defaults for learned features)
+            "--Mapper.min_num_matches", str(params.get('min_num_matches', 8)),  # Lowered from 10
+            "--Mapper.abs_pose_min_num_inliers", str(params.get('abs_pose_min_inliers', 12)),  # Lowered from 15
             "--Mapper.abs_pose_min_inlier_ratio", str(params.get('abs_pose_min_inlier_ratio', 0.15)),
 
-            # Triangulation (configurable)
-            "--Mapper.init_min_tri_angle", str(params.get('init_min_tri_angle', 2.0)),
-            "--Mapper.tri_min_angle", str(params.get('tri_min_angle', 1.0)),
+            # Triangulation (stricter angles for more stable 3D points)
+            "--Mapper.init_min_tri_angle", str(params.get('init_min_tri_angle', 4.0)),  # Increased from 2.0
+            "--Mapper.tri_min_angle", str(params.get('tri_min_angle', 1.5)),  # Increased from 1.0
 
             # Model selection
             "--Mapper.max_num_models", "1",
             "--Mapper.max_model_overlap", "20",
 
-            # BA memory
-            "--Mapper.ba_global_images_ratio", "1.1",
-            "--Mapper.ba_global_points_ratio", "1.1",
+            # BA memory (dynamically adjusted based on dataset size)
+            "--Mapper.ba_global_images_ratio", str(ba_images_ratio),
+            "--Mapper.ba_global_points_ratio", str(ba_points_ratio),
 
-            # Filtering
-            "--Mapper.filter_max_reproj_error", "4.0",  # Lenient default
-            "--Mapper.filter_min_tri_angle", "1.0"  # Lenient default
+            # Filtering (stricter for learned features with sub-pixel accuracy)
+            "--Mapper.filter_max_reproj_error", "2.0",  # Reduced from 4.0 (tighter quality control)
+            "--Mapper.filter_min_tri_angle", "1.5"  # Increased from 1.0 (remove unstable points)
         ]
 
     try:
@@ -1007,7 +1050,8 @@ def colmap_binary_reconstruction(features: Dict[str, Any], matches: Dict[Tuple[s
 
     # Run COLMAP binary with custom parameters
     success = run_colmap_binary(database_path, image_dir, output_path,
-                                mapper_params=mapper_params, timeout=timeout)
+                                mapper_params=mapper_params, timeout=timeout,
+                                num_images=len(features))
     
     if success:
         # Read results
