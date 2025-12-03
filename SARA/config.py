@@ -12,7 +12,7 @@ class SARAConfig:
     img_dir: str
     out_dir: str
 
-    knn_k: int = 30
+    knn_k: int = 100
 
     top_t_mutual: int = 128
     min_nn_for_ransac: int = 32
@@ -26,7 +26,7 @@ class SARAConfig:
     alpha: float = 1.0
     beta: float = 1.0
 
-    loop_budget_per_node: float = 0.5
+    loop_budget_per_node: float = 0.7
     deg_cap: Optional[int] = 6
 
     # Ablation study modes
@@ -45,7 +45,7 @@ class SARAConfig:
 
     enable_weak_view_reinforcement: bool = True
     weak_view_percentile: float = 0.20  # Bottom 20%
-    weak_view_extra_edges: int = 2
+    weak_view_extra_edges: int = 15
 
     use_intrinsics: bool = True
     fx: Optional[float] = None

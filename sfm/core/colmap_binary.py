@@ -257,7 +257,7 @@ def create_colmap_database(features: Dict[str, Any], matches: Dict[Tuple[str, st
 
 
 def run_colmap_binary(database_path: Path, image_dir: Path, output_path: Path,
-                      mapper_params: Optional[Dict] = None, timeout: int = 1200,
+                      mapper_params: Optional[Dict] = None, timeout: int = 2000,
                       num_images: Optional[int] = None) -> bool:
     """Run COLMAP using binary executable
 

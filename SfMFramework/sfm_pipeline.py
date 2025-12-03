@@ -128,7 +128,7 @@ def parse_args():
     parser.add_argument(
         "--colmap_timeout",
         type=int,
-        default=1200,
+        default=2000,
         help="COLMAP mapper timeout in seconds (default: 1200 = 20 minutes)"
     )
     parser.add_argument(

@@ -57,7 +57,7 @@ def parse_args():
         choices=PairSelectorFactory.list_selectors(),
         help="Pair selection strategy"
     )
-    parser.add_argument("--max_pairs_per_image", type=int, default=20, help="Max pairs per image")
+    parser.add_argument("--max_pairs_per_image", type=int, default=100, help="Max pairs per image")
 
     # Geometric verification
     parser.add_argument("--geometric_verification", action="store_true", help="Run RANSAC")
